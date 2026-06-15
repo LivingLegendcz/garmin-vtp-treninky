@@ -597,6 +597,8 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
         else:
             start_date = datetime.date.fromisoformat(str(start_str))
 
+    _validate_start(start_date)
+
     api = None
     existing_by_name = {}
     if not dry_run:
@@ -653,6 +655,66 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
             total += 1
 
     print(f"\nCelkem nahráno: {total} treninkú.")
+
+
+# ── Validace a odhad délky ────────────────────────────────────────────────────
+def _validate_start(date):
+    """Varování pokud datum není pondělí."""
+    if date.weekday() != 0:
+        dny = ["pondeli", "utery", "streda", "ctvrtek", "patek", "sobota", "nedele"]
+        print(f"VAROVANI: {date} je {dny[date.weekday()]}, ne pondeli."
+              f" Plan predpoklada pondeli jako 1. den tydne.")
+
+
+def _estimate_beh_sec(kroky):
+    """Odhadne délku běžeckých kroků v sekundách (rekurzivně)."""
+    total = 0
+    for k in kroky:
+        kr = k.get("krok", "")
+        if kr in ("rozklusani", "vyklus", "klus"):
+            total += k.get("cas_min", 10) * 60
+        elif kr in ("beh", "usek"):
+            if "cas_s" in k:
+                total += k["cas_s"]
+            elif "cas_min" in k:
+                total += k["cas_min"] * 60
+            elif "vzdalenost_m" in k:
+                total += k["vzdalenost_m"] / 150 * 60
+            elif "vzdalenost_km" in k:
+                total += k["vzdalenost_km"] * 1000 / 150 * 60
+        elif kr in ("chuze", "pauza"):
+            if "cas_s" in k:
+                total += k["cas_s"]
+            elif "cas_min" in k:
+                total += k["cas_min"] * 60
+        elif kr == "opakovat":
+            total += k.get("pocet", 1) * _estimate_beh_sec(k.get("obsah", []))
+        elif kr == "pyramida":
+            useky = k.get("useky_m", [])
+            total += sum(useky) / 150 * 60 * 2  # beh + pauzy
+    return total
+
+
+def _estimate_duration_min(day_data):
+    """Odhadne délku tréninku v minutách."""
+    typ = day_data.get("typ", "")
+    if typ == "kontrolni_test":
+        return 40
+    if typ == "beh":
+        return max(20, round(_estimate_beh_sec(day_data.get("kroky", [])) / 60))
+    if typ in ("silovy", "kombinace"):
+        kola = _int_range(day_data.get("kola", 1))
+        one_round_sec = 0
+        for c in day_data.get("cviky", []):
+            serie = _int_range(c.get("serie", 1))
+            cvik_s = int(c.get("cas_s") or _int_range(c.get("opakovani", 10)) * 3)
+            one_round_sec += serie * (cvik_s + _int_range(c.get("pauza_s", 60)))
+        pauza_kola = day_data.get("pauza_mezi_koly_s", 180)
+        total_sec = kola * one_round_sec + max(0, kola - 1) * pauza_kola + 300
+        if typ == "kombinace":
+            total_sec += _estimate_beh_sec(day_data.get("kroky", []))
+        return max(20, round(total_sec / 60))
+    return 45
 
 
 # ── ICS export (Google Kalendář) ───────────────────────────────────────────────
@@ -716,7 +778,8 @@ def _ics_description(day_data):
     return ""
 
 
-def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None, out_file="vtp-plan.ics"):
+def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None,
+                 out_file="vtp-plan.ics", start_time=None):
     """Vygeneruje ICS soubor pro import do Google Kalendáře."""
     plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
     if not plan_file.exists():
@@ -733,6 +796,13 @@ def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None, out_fi
             print("CHYBA: 'start_datum' neni nastaven v YAML. Pouzij --start YYYY-MM-DD.")
             sys.exit(1)
         start_date = datetime.date.fromisoformat(str(start_str))
+
+    _validate_start(start_date)
+
+    t = None
+    if start_time:
+        h, m = map(int, start_time.split(":"))
+        t = datetime.time(h, m)
 
     ics_lines = []
     ics_lines.append("BEGIN:VCALENDAR\r\n")
@@ -761,12 +831,19 @@ def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None, out_fi
             summary = f"VTP T{tyden:02d} {DEN_CODE[den_key]} - {label}"
             uid     = name.lower() + "@garmin-treninky"
             desc    = _ics_description(day_data)
-            dtend   = date + datetime.timedelta(days=1)
 
             ics_lines.append("BEGIN:VEVENT\r\n")
             ics_lines.append(_ics_fold(f"UID:{uid}"))
-            ics_lines.append(_ics_fold(f"DTSTART;VALUE=DATE:{date.strftime('%Y%m%d')}"))
-            ics_lines.append(_ics_fold(f"DTEND;VALUE=DATE:{dtend.strftime('%Y%m%d')}"))
+            if t:
+                duration_min = _estimate_duration_min(day_data)
+                dt_start = datetime.datetime.combine(date, t)
+                dt_end   = dt_start + datetime.timedelta(minutes=duration_min)
+                ics_lines.append(_ics_fold(f"DTSTART:{dt_start.strftime('%Y%m%dT%H%M%S')}"))
+                ics_lines.append(_ics_fold(f"DTEND:{dt_end.strftime('%Y%m%dT%H%M%S')}"))
+            else:
+                dtend = date + datetime.timedelta(days=1)
+                ics_lines.append(_ics_fold(f"DTSTART;VALUE=DATE:{date.strftime('%Y%m%d')}"))
+                ics_lines.append(_ics_fold(f"DTEND;VALUE=DATE:{dtend.strftime('%Y%m%d')}"))
             ics_lines.append(_ics_fold(f"SUMMARY:{summary}"))
             if desc:
                 ics_lines.append(_ics_fold(f"DESCRIPTION:{_ics_escape(desc)}"))
@@ -803,6 +880,8 @@ Příklady:
                    help="Jen výpis JSON, nic nenahrávat")
     p.add_argument("--ics",     nargs="?", const="vtp-plan.ics", metavar="SOUBOR",
                    help="Vygenerovat ICS soubor pro Google Kalendar (default: vtp-plan.ics)")
+    p.add_argument("--time",    default=None, metavar="HH:MM",
+                   help="Cas zacatku treninku v ICS (napr. 06:30); bez toho jsou udalosti celodennni")
     p.add_argument("--delete",   action="store_true",
                    help="Smazat vsechny VTP-T* workouty z Garmin Connect (bez nahrani)")
     p.add_argument("--no-save",  action="store_true",
@@ -817,6 +896,7 @@ Příklady:
             weeks_limit=args.weeks,
             start_override=args.start,
             out_file=args.ics,
+            start_time=args.time,
         )
     elif args.delete:
         delete_vtp_workouts(args.email, args.password, args.no_save)

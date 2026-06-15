@@ -63,6 +63,7 @@ python push_plan.py --plan muzi --email tvuj@email.cz --password TveHeslo
 | `--weeks N` | Nahrát jen prvních N týdnů |
 | `--dry-run` | Jen výpis JSON, nic nenahrávat |
 | `--ics [soubor]` | Vygenerovat `.ics` pro Google Kalendář (výchozí: `vtp-plan.ics`) |
+| `--time HH:MM` | Čas začátku tréninku v ICS (bez toho jsou události celodenní) |
 | `--delete` | Smazat všechny `VTP-T*` workouty z Garmin Connect |
 | `--email` / `--password` | Přihlašovací údaje Garmin Connect |
 
@@ -75,10 +76,14 @@ Pokud chceš mít tréninky i v Google Kalendáři (přehled v telefonu, sdílen
 ### 1. Vygeneruj ICS soubor
 
 ```bash
+# Celodenní události (bez pevného času)
 python push_plan.py --plan muzi --start 2026-06-16 --ics
+
+# S pevným časem začátku a odhadovanou délkou (doporučeno — fungují notifikace)
+python push_plan.py --plan muzi --start 2026-06-16 --ics --time 06:30
 ```
 
-Vznikne soubor `vtp-plan.ics` — jeden celodeňní záznam na každý tréninkový den s popisem cvičení.
+Vznikne soubor `vtp-plan.ics` — jeden záznam na každý tréninkový den s popisem cvičení. S `--time` má každá událost i odhadovanou délku tréninku (Google Calendar pak nabídne nastavit notifikaci).
 
 ### 2. Importuj do Google Kalendáře
 
