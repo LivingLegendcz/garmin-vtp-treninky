@@ -544,18 +544,13 @@ def day_to_workout(day_data, name):
 
 
 # ── Garmin Connect I/O ─────────────────────────────────────────────────────────
-def _connect(email=None, password=None):
-    """Připojí se ke Garmin Connect.
-    - email+heslo: autentizace v paměti, token se NEUKLADÁ na disk
-    - bez email/heslo: načte token z TOKEN_DIR
-    """
+def _connect(email=None, password=None, no_save=False):
+    """Připojí se ke Garmin Connect. Token se uloží do TOKEN_DIR (pokud není --no-save)."""
     api = Garmin(email or None, password or None)
 
-    if email and password:
-        # Přihlásit se bez tokenstore → token se neuloží
+    if no_save:
         result = api.login()
     else:
-        # Načíst token ze souboru
         TOKEN_DIR.mkdir(parents=True, exist_ok=True)
         result = api.login(tokenstore=str(TOKEN_DIR))
 
@@ -566,7 +561,21 @@ def _connect(email=None, password=None):
     return api
 
 
-def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False, email=None, password=None):
+def delete_vtp_workouts(email=None, password=None, no_save=False):
+    """Smaže všechny workouty začínající VTP-T z Garmin Connect."""
+    print("Prihlasování do Garmin Connect...")
+    api = _connect(email, password, no_save)
+    existing = api.get_workouts(0, 1000)
+    vtp = [w for w in existing if w["workoutName"].startswith("VTP-T")]
+    print(f"Nalezeno {len(vtp)} VTP workoutu ke smazání.")
+    for w in vtp:
+        api.delete_workout(w["workoutId"])
+        print(f"  smazán: {w['workoutName']}")
+    print(f"\nSmazáno celkem: {len(vtp)} workoutu.")
+
+
+def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
+              email=None, password=None, no_save=False, start_override=None):
     plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
     if not plan_file.exists():
         print(f"CHYBA: soubor {plan_file} neexistuje.")
@@ -574,20 +583,24 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False, email=None, pas
     with open(plan_file, encoding="utf-8") as f:
         plan = yaml.safe_load(f)
 
-    start_str = plan["meta"].get("start_datum")
-    if not start_str:
-        if not dry_run:
-            print("CHYBA: 'start_datum' neni nastaven v YAML.")
-            sys.exit(1)
-        start_date = datetime.date.today()  # placeholder pro dry-run
+    # Datum začátku: --start má přednost před YAML
+    if start_override:
+        start_date = datetime.date.fromisoformat(start_override)
     else:
-        start_date = datetime.date.fromisoformat(str(start_str))
+        start_str = plan["meta"].get("start_datum")
+        if not start_str:
+            if not dry_run:
+                print("CHYBA: 'start_datum' neni nastaven v YAML. Pouzij --start YYYY-MM-DD.")
+                sys.exit(1)
+            start_date = datetime.date.today()  # placeholder pro dry-run
+        else:
+            start_date = datetime.date.fromisoformat(str(start_str))
 
     api = None
     existing_by_name = {}
     if not dry_run:
         print("Prihlasování do Garmin Connect...")
-        api = _connect(email, password)
+        api = _connect(email, password, no_save)
         print(f"Prihlasen. Nacitám existující workouty...")
         existing = api.get_workouts(0, 1000)
         existing_by_name = {w["workoutName"]: w["workoutId"] for w in existing}
@@ -643,24 +656,44 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False, email=None, pas
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 def main():
-    p = argparse.ArgumentParser(description="VTP plan -> Garmin Connect")
+    p = argparse.ArgumentParser(
+        description="VTP plan -> Garmin Connect",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Příklady:
+  python push_plan.py --dry-run                          # náhled bez nahrání
+  python push_plan.py --start 2026-09-01 --weeks 1       # pilot, ženy
+  python push_plan.py --plan zeny --email x@y.cz --password ...
+  python push_plan.py --delete --email x@y.cz --password ...  # smazat VTP workouty
+""")
     p.add_argument("--plan",     default="muzi", choices=["muzi", "zeny"],
                    help="Ktery plan nahrat: muzi (default) nebo zeny")
+    p.add_argument("--start",    default=None, metavar="YYYY-MM-DD",
+                   help="Datum zacatku (pondeli tydne 1), prepisuje start_datum v YAML")
     p.add_argument("--weeks",    type=int, default=None,
                    help="Nahrat jen prvnich N tydnu")
     p.add_argument("--dry-run",  action="store_true",
                    help="Jen výpis JSON, nic nenahrávat")
+    p.add_argument("--delete",   action="store_true",
+                   help="Smazat vsechny VTP-T* workouty z Garmin Connect (bez nahrani)")
+    p.add_argument("--no-save",  action="store_true",
+                   help="Neukladat Garmin token na disk (pouzij pro jednourazove spusteni)")
     p.add_argument("--email",    default=None, help="Garmin Connect e-mail")
     p.add_argument("--password", default=None, help="Garmin Connect heslo")
     args = p.parse_args()
 
-    push_plan(
-        plan_name=args.plan,
-        weeks_limit=args.weeks,
-        dry_run=args.dry_run,
-        email=args.email,
-        password=args.password,
-    )
+    if args.delete:
+        delete_vtp_workouts(args.email, args.password, args.no_save)
+    else:
+        push_plan(
+            plan_name=args.plan,
+            weeks_limit=args.weeks,
+            dry_run=args.dry_run,
+            email=args.email,
+            password=args.password,
+            no_save=args.no_save,
+            start_override=args.start,
+        )
 
 
 if __name__ == "__main__":

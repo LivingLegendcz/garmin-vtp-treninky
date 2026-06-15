@@ -1,0 +1,43 @@
+name: Validate plans
+
+on: [push, pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install pyyaml
+
+      - name: Validate YAML plans
+        run: |
+          python - <<'EOF'
+          import yaml, sys
+
+          plans = [
+              "plan/vtp-plan-muzi.yaml",
+              "plan/vtp-plan-zeny.yaml",
+          ]
+
+          for path in plans:
+              with open(path, encoding="utf-8") as f:
+                  d = yaml.safe_load(f)
+
+              assert d["meta"]["pocet_tydnu"] == 12, f"{path}: pocet_tydnu != 12"
+              assert len(d["tydny"]) == 12, f"{path}: pocet tydnu v tydny != 12"
+
+              for t in d["tydny"]:
+                  assert "dny" in t, f"{path} T{t['tyden']}: chybi 'dny'"
+                  for den, day in t["dny"].items():
+                      if day and "typ" not in day:
+                          raise AssertionError(f"{path} T{t['tyden']}-{den}: chybi 'typ'")
+
+              print(f"OK  {path}  ({len(d['tydny'])} tydnu)")
+
+          print("Vsechny plany jsou validni.")
+          EOF
