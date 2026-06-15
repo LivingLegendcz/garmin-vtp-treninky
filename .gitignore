@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+.garth/
+.garmin_tokens/
+*.env
+.env

@@ -1,0 +1,479 @@
+# Tréninkový plán pro výroční tělesné přezkoušení (VTP) — ženy, 12 týdnů
+# Zdroj: https://doarmady.mo.gov.cz/priprava/vyrocni-telesne-prezkouseni/treninkovy-plan-pro-vyrocni-telesne-prezkouseni/zeny
+# Strojově čitelný přepis pro zpracování do Garmin Connect (viz docs/implementacni-plan.md)
+
+meta:
+  nazev: "VTP 12týdenní plán (ženy)"
+  zdroj: "https://doarmady.mo.gov.cz/priprava/vyrocni-telesne-prezkouseni/treninkovy-plan-pro-vyrocni-telesne-prezkouseni/zeny"
+  pocet_tydnu: 12
+  start_datum: null   # doplnit pondělí 1. týdne (YYYY-MM-DD) před nahráním
+  konvence_nazvu: "VTP-T{TT}-{DEN}-{TYP}"
+
+testy_minima:
+  - { po_tydnu: 2,  beh_12min_m: 2000, lehsedy_1min: 23 }
+  - { po_tydnu: 4,  beh_12min_m: 2100, lehsedy_1min: 28, skok_daleky_cm: 144 }
+  - { po_tydnu: 6,  beh_12min_m: 2200, lehsedy_1min: 33 }
+  - { po_tydnu: 8,  beh_12min_m: 2300, lehsedy_1min: 38 }
+  - { po_tydnu: 10, beh_12min_m: 2400, lehsedy_1min: 43 }
+  - { po_tydnu: 12, beh_12min_m: 2550, lehsedy_1min: 45 }
+
+tydny:
+  - tyden: 1
+    dny:
+      po:
+        typ: silovy
+        poznamka: "pauza = aktivní odpočinek, např. chůze"
+        kola: "1-2"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: plank_vydrz, cas_s: 20, serie: 5, pauza_s: 60, popis: "vzpor ležmo výdrž" }
+          - { cvik: drep, opakovani: 10, serie: 3, pauza_s: 30 }
+          - { cvik: nuzky_vleze, cas_s: 15, serie: 3, pauza_s: 60 }
+      ut:
+        typ: beh
+        podtyp: indiansky_beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10, poznamka: "dynamický strečink" }
+          - krok: opakovat
+            pocet: 10
+            obsah:
+              - { krok: chuze, cas_s: 30 }
+              - { krok: beh, cas_s: 60 }
+          - { krok: vyklus, cas_min: 10 }
+      st: { typ: volno }
+      ct: { typ: volno }
+      pa:
+        typ: silovy
+        kola: "1-2"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: shyb_negativni, opakovani: 5, serie: 5, pauza_s: 60, popis: "negativní shyb, brzdit 3-5 s" }
+          - { cvik: vyskok_z_podrepu, opakovani: 5, serie: 6, pauza_s: 60 }
+          - { cvik: leh_sed, opakovani: 8, serie: 5, pauza_s: 60 }
+      so:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 15 }
+          - { krok: beh, cas_min: 10, popis: "souvislý běh" }
+          - { krok: vyklus, cas_min: 15 }
+      ne: { typ: volno }
+
+  - tyden: 2
+    dny:
+      po:
+        typ: silovy
+        kola: "1-2"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: klik_na_kolenou, opakovani: 6, serie: "3-5", pauza_s: 60 }
+          - { cvik: vyskok_na_bednu, opakovani: 4, serie: 1, pauza_s: 60, popis: "seskok z bedny 30-50 cm" }
+          - { cvik: leh_sed, opakovani: 10, serie: 1, pauza_s: 60 }
+          - { cvik: anglicak, opakovani: 4, serie: 1, pauza_s: 60 }
+      ut:
+        typ: beh
+        podtyp: indiansky_beh
+        kroky:
+          - { krok: beh, cas_min: 25, popis: "indiánský běh (střídání chůze a běhu)" }
+      st: { typ: volno }
+      ct:
+        typ: silovy
+        kola: "1-2"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: klik_na_kolenou, opakovani: 6, serie: 1, pauza_s: 60, popis: "10s výdrž ve vzporu, pak 6x klik na kolenou" }
+          - { cvik: drep_do_vyponu, opakovani: 8, serie: 1, pauza_s: 30 }
+          - { cvik: rotace_trupu_vsede, opakovani: 8, serie: 1, pauza_s: 60 }
+          - { cvik: anglicak, opakovani: 3, serie: 1, pauza_s: 30 }
+      pa:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10, poznamka: "běžecká ABECEDA, dynamické protažení" }
+          - krok: opakovat
+            pocet: 10
+            obsah:
+              - { krok: beh, cas_s: 30, cil: "85 % max" }
+              - { krok: klus, cas_s: 60, popis: "volně klus/chůze" }
+          - { krok: vyklus, cas_min: 10 }
+      so: { typ: volno }
+      ne:
+        typ: kontrolni_test
+        popis: "12min běh + max leh-sedy za 1 min"
+        minima: { beh_12min_m: 2000, lehsedy_1min: 23 }
+
+  - tyden: 3
+    dny:
+      po:
+        typ: silovy
+        kola: "1-2"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: shyb_negativni, opakovani: 8, serie: 1, pauza_s: 60, popis: "negativní shyby" }
+          - { cvik: vypad, opakovani: 6, serie: 1, pauza_s: 60 }
+          - { cvik: leh_sed, cas_s: 20, serie: 1, pauza_s: 120, popis: "max opakování za 20 s" }
+          - { cvik: anglicak, opakovani: 4, serie: 1, pauza_s: 60 }
+      ut:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10 }
+          - { krok: beh, cas_min: 15, cil: "60-70 % SFmax", popis: "souvislý běh" }
+          - { krok: vyklus, cas_min: 10 }
+      st: { typ: volno }
+      ct: { typ: volno }
+      pa:
+        typ: silovy
+        kola: 1
+        cviky:
+          - { cvik: shyb_negativni, opakovani: 10, serie: 1, pauza_s: 60 }
+          - { cvik: zabak, opakovani: 4, serie: 1, pauza_s: 60 }
+          - { cvik: veslovani_vsede, cas_s: 20, serie: 1, pauza_s: 60 }
+          - { cvik: anglicak, opakovani: 5, serie: 1, pauza_s: 60 }
+      so:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10 }
+          - krok: opakovat
+            pocet: 4
+            obsah:
+              - { krok: beh, cas_min: 2, cil: "85 % SFmax" }
+              - { krok: pauza, cas_min: 2 }
+          - { krok: vyklus, cas_min: 10 }
+      ne: { typ: volno }
+
+  - tyden: 4
+    dny:
+      po:
+        typ: silovy
+        kola: "1-2"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: vis_pasivni, cas_s: 10, serie: 1, pauza_s: 120, popis: "výdrž ve shybu" }
+          - { cvik: zabak, opakovani: 3, serie: 1, pauza_s: 120, popis: "max úsilí" }
+          - { cvik: leh_sed, cas_s: 60, serie: 1, pauza_s: 120, popis: "max opakování za 1 min" }
+          - { cvik: anglicak, opakovani: 5, serie: 1, pauza_s: 60 }
+      ut:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10 }
+          - krok: opakovat
+            pocet: 4
+            obsah:
+              - { krok: beh, cas_s: 50, popis: "běh do kopce" }
+              - { krok: pauza, cas_min: 2, popis: "sejít dolů" }
+          - { krok: vyklus, cas_min: 15 }
+      st: { typ: volno }
+      ct:
+        typ: silovy
+        podtyp: kruhovy
+        kola: "2-3"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: vis_pasivni, pauza_s: 60, popis: "max výdrž ve shybu" }
+          - { cvik: zabak, opakovani: 3, pauza_s: 60, popis: "max úsilí" }
+          - { cvik: leh_sed, cas_s: 60, pauza_s: 60, popis: "max opakování za 1 min" }
+          - { cvik: anglicak, opakovani: 5, pauza_s: 60 }
+      pa:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 15, poznamka: "běžecká ABECEDA, dynamické protažení" }
+          - krok: opakovat
+            pocet: 6
+            obsah:
+              - { krok: beh, cas_s: 20, cil: "90 % max rychlosti" }
+              - { krok: klus, cas_s: 60, popis: "volný klus/chůze" }
+          - { krok: vyklus, cas_min: 15 }
+      so: { typ: volno }
+      ne:
+        typ: kontrolni_test
+        popis: "12min běh + leh-sedy + skok daleký z místa"
+        minima: { beh_12min_m: 2100, lehsedy_1min: 28, skok_daleky_cm: 144 }
+
+  - tyden: 5
+    dny:
+      po:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 5 }
+          - { krok: beh, cas_min: 30, cil: "75 % SFmax", popis: "souvislý běh" }
+          - { krok: vyklus, cas_min: 5 }
+      ut:
+        typ: silovy
+        kola: 1
+        cviky:
+          - { cvik: klik, opakovani: 10, serie: 3, pauza_s: 60 }
+          - { cvik: vypad, opakovani: 10, serie: 4, pauza_s: 20 }
+          - { cvik: veslovani_vsede, cas_s: 30, serie: 4, pauza_s: 60 }
+          - { cvik: panak, cas_s: 60 }
+      st: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+      ct: { typ: volno }
+      pa:
+        typ: beh
+        podtyp: fartlek
+        poznamka: "R = rychlejší běh, V = volný klus, úseky v minutách"
+        kroky:
+          - { krok: rozklusani, cas_min: 10 }
+          - { krok: beh, popis: "3R 2V, 2R 3V, 4R 1V, 1R 4V (minuty)" }
+          - { krok: vyklus, cas_min: 10 }
+      so:
+        typ: silovy
+        podtyp: kruhovy
+        kola: "3-5"
+        pauza_mezi_koly_s: 120
+        cviky:
+          - { cvik: vis_pasivni, pauza_s: 60, popis: "max výdrž ve shybu min. 1 min" }
+          - { cvik: drep_s_vyskokem, opakovani: 6, pauza_s: 60 }
+          - { cvik: leh_sed, pauza_s: 60, popis: "max opakování min. 20" }
+      ne: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+
+  - tyden: 6
+    dny:
+      po: { typ: volno }
+      ut:
+        typ: beh
+        kroky:
+          - { krok: beh, cas_min: 35, popis: "souvislý běh" }
+      st:
+        typ: silovy
+        kola: "3-4"
+        pauza_mezi_koly_s: 240
+        kroky_pred: "10 min rozcvičení: zahřátí, dynamické protažení, kroužení ve velkých kloubech"
+        cviky:
+          - { cvik: leh_sed, cas_s: 60, pauza_s: 120, popis: "max úsilí" }
+          - { cvik: vis_pasivni, popis: "max výdrž ve shybu" }
+      ct:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10 }
+          - krok: opakovat
+            pocet: 5
+            obsah:
+              - { krok: usek, vzdalenost_m: 400, cil: "85 % SFmax" }
+              - { krok: pauza, cas_min: 2 }
+          - { krok: vyklus, cas_min: 10 }
+      pa: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+      so: { typ: volno }
+      ne:
+        typ: kontrolni_test
+        minima: { beh_12min_m: 2200, lehsedy_1min: 33 }
+
+  - tyden: 7
+    dny:
+      po:
+        typ: beh
+        kroky:
+          - { krok: beh, cas_min: 30, popis: "volný běh" }
+      ut:
+        typ: silovy
+        kola: "1-2"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: klik_hand_release, opakovani: 6, serie: 1, pauza_s: 60, popis: "klik do lehu se zvednutím dlaní" }
+          - { cvik: nuzky_vleze, cas_s: 20, serie: 1, pauza_s: 60, popis: "20s střih + 10s přednožit, rukama dotyk špiček" }
+          - { cvik: anglicak, opakovani: 8, serie: 1, pauza_s: 60 }
+          - { cvik: panak, cas_s: 60 }
+          - { cvik: vis_pasivni, cas_s: 60, serie: 1, popis: "nasčítat celkem 1 min ve visu" }
+      st: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+      ct: { typ: volno }
+      pa:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10 }
+          - krok: opakovat
+            pocet: 3
+            obsah:
+              - { krok: usek, vzdalenost_m: 1000, cil: "tempo 5:20-5:30/km" }
+              - { krok: pauza, cas_min: 3, popis: "nebo do poklesu SF na 120 tep/min" }
+          - { krok: vyklus, cas_min: 10 }
+      so:
+        typ: kombinace
+        popis: "běh + silový trénink, 2 kola"
+        kola: 2
+        bloky:
+          - { cvik: sklapovacky_plus_klik, popis: "15x sklapovačky + 15x klik", serie: 1, pauza_s: 60 }
+          - { krok: beh, vzdalenost_km: "1-2", popis: "volný běh" }
+          - { cvik: sklapovacky_plus_klik, popis: "15x sklapovačky + 15x klik", serie: 1, pauza_s: 60 }
+      ne: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+
+  - tyden: 8
+    dny:
+      po: { typ: volno }
+      ut:
+        typ: beh
+        kroky:
+          - { krok: beh, cas_min: 30, popis: "souvislý běh" }
+      st:
+        typ: silovy
+        kola: "3-4"
+        pauza_mezi_koly_s: 240
+        kroky_pred: "10 min rozcvičení: zahřátí, dynamické protažení, kroužení ve velkých kloubech"
+        cviky:
+          - { cvik: leh_sed, cas_s: 60, pauza_s: 240, popis: "max úsilí" }
+          - { cvik: vis_pasivni, popis: "max výdrž ve shybu" }
+      ct:
+        typ: beh
+        podtyp: pyramida
+        kroky:
+          - { krok: rozklusani, cas_min: 10 }
+          - { krok: pyramida, useky_m: [50, 100, 150, 300, 600, 1200, 600, 300, 150, 100, 50], cil: "75 % SFmax", pauza: "1:1 (pauza = délka úseku)" }
+          - { krok: vyklus, cas_min: 10 }
+      pa: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+      so: { typ: volno }
+      ne:
+        typ: kontrolni_test
+        minima: { beh_12min_m: 2300, lehsedy_1min: 38 }
+
+  - tyden: 9
+    dny:
+      po:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10, poznamka: "ABECEDA, dynamické protažení" }
+          - { krok: beh, cas_min: 40, popis: "volný běh" }
+          - { krok: vyklus, cas_min: 10 }
+      ut:
+        typ: silovy
+        podtyp: kruhovy_tabata
+        rezim: "20 s zátěž / 10 s pauza"
+        kola: "1-2"
+        pauza_mezi_koly_s: 180
+        cviky:
+          - { cvik: leh_sed }
+          - { cvik: klik, popis: "střídej úzký/normální/široký úchop" }
+          - { cvik: jizda_na_kole_vsede, popis: "sed, ruce v týl, nohy nad zemí, lokty dotyk kolene" }
+          - { cvik: sklapovacky }
+          - { cvik: klik_diamant, popis: "dlaně na úzko" }
+          - { cvik: rotace_trupu_vsede, popis: "nohy pokrčené nad zemí, rotace do stran" }
+          - { cvik: klik_hand_release, popis: "klik do lehu a odlepení dlaní" }
+        po_treninku:
+          - { cvik: extenze_zad, opakovani: 7, serie: 4, pauza_s: 10, popis: "leh na břiše, zvednout ruce a nohy" }
+      st: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+      ct: { typ: volno }
+      pa:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 15, poznamka: "ABECEDA, dynamické protažení" }
+          - krok: opakovat
+            pocet: 2
+            pauza_mezi_s: 300
+            obsah:
+              - krok: opakovat
+                pocet: 6
+                obsah:
+                  - { krok: usek, vzdalenost_m: 100, cil: "90 % max úsilí" }
+                  - { krok: klus, popis: "výklus zpět na start" }
+          - { krok: vyklus, cas_min: 15 }
+      so:
+        typ: silovy
+        kola: "3-5"
+        pauza_mezi_koly_s: 60
+        cviky:
+          - { cvik: plank_plus_lehsed, popis: "30 s plank + 30 s leh-sed", pauza_s: 60 }
+          - { cvik: plank_na_boku, popis: "15 s pravá / 15 s levá + 30 s kmity vlevo/vpravo s dotykem kotníků" }
+        po_treninku:
+          - { cvik: anglicak, opakovani: 7, serie: 1, pauza_s: 60, popis: "angličáky" }
+      ne: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+
+  - tyden: 10
+    dny:
+      po: { typ: volno }
+      ut:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, poznamka: "ABECEDA, dynamické protažení" }
+          - krok: opakovat
+            pocet: 5
+            obsah:
+              - { krok: usek, vzdalenost_m: 500, cil: "max do 2:20" }
+              - { krok: pauza, cas_s: 150 }
+          - { krok: vyklus, cas_min: 10 }
+      st:
+        typ: silovy
+        podtyp: sestupna_pyramida
+        kroky_pred: "10 min rozcvičení: zahřátí, dynamické protažení, kroužení ve velkých kloubech"
+        bloky:
+          - cvik: leh_sed
+            popis: "max úsilí: 70 s - pauza 3 min - 50 s - pauza 2 min - 30 s - pauza 1 min - 10 s"
+          - { krok: pauza, cas_min: 5 }
+          - cvik: vis_pasivni
+            popis: "2x (30 s vis - 3 min pauza - 15 s výdrž ve shybu - 3 min pauza)"
+      ct:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, cas_min: 10, poznamka: "ABECEDA, dynamické protažení" }
+          - { krok: beh, cas_min: 25, popis: "volný běh" }
+          - { krok: vyklus, cas_min: 10 }
+      pa: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+      so: { typ: volno }
+      ne:
+        typ: kontrolni_test
+        minima: { beh_12min_m: 2400, lehsedy_1min: 43 }
+
+  - tyden: 11
+    dny:
+      po:
+        typ: beh
+        kroky:
+          - { krok: beh, cas_min: 45, popis: "volný běh", cil: "průměrná SF 120 tep/min" }
+      ut:
+        typ: silovy
+        cviky:
+          - { cvik: vis_pritahovani_kolen_plus_lehsed, popis: "5x vis + 10x leh-sed", serie: "3-5", pauza_s: 60 }
+          - { krok: pauza, cas_min: "2-3" }
+          - { cvik: plank_plus_lehsed, popis: "20 s plank + 12x sklapovačky", serie: "3-5", pauza_s: 60 }
+      st: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+      ct: { typ: volno }
+      pa:
+        typ: kombinace
+        podtyp: hiit_beh_sila
+        kola: "2-3"
+        pauza_mezi_koly_s: 180
+        kroky_pred: "15 min rozklusání, ABECEDA, dynamické protažení"
+        bloky:
+          - { popis: "1 min leh-sed, 1 min pauza, 1 min leh-sed, 20s běh na 100 %" }
+          - { popis: "20s klik, 30s pauza, 20s klik, 20s běh na 100 %" }
+      so:
+        typ: silovy
+        cviky:
+          - { cvik: plank, rezim: "8x (20s zátěž / 10s pauza)" }
+          - { cvik: podrep_vydrz, rezim: "8x (20s zátěž / 10s pauza)" }
+          - { cvik: vis_pasivni, rezim: "8x (10s vis / 20s pauza)" }
+      ne: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+
+  - tyden: 12
+    dny:
+      po: { typ: volno }
+      ut:
+        typ: beh
+        kroky:
+          - { krok: rozklusani, poznamka: "ABECEDA, dynamické protažení" }
+          - krok: opakovat
+            pocet: 2
+            obsah:
+              - { krok: usek, vzdalenost_m: 100, cil: "80 %" }
+              - { krok: pauza, cas_min: 1 }
+          - { krok: usek, vzdalenost_m: 1000, cil: "max, do 4:50/km" }
+          - { krok: pauza, cas_s: 210 }
+          - { krok: usek, vzdalenost_m: 2000, cil: "max, do 9:50" }
+          - { krok: pauza, cas_s: 270 }
+          - { krok: usek, vzdalenost_m: 500, cil: "max, do 2:20" }
+          - { krok: pauza, cas_s: 210 }
+          - krok: opakovat
+            pocet: 2
+            obsah:
+              - { krok: usek, vzdalenost_m: 100, cil: "80 %" }
+              - { krok: pauza, cas_min: 1 }
+          - { krok: vyklus, cas_min: 10 }
+      st:
+        typ: silovy
+        kroky_pred: "10 min rozcvičení: zahřátí, dynamické protažení, kroužení ve velkých kloubech"
+        cviky:
+          - { cvik: leh_sed, cas_s: 60, serie: 4, pauza_s: "180-300", popis: "max úsilí" }
+          - { cvik: vis_pasivni, rezim: "3x (20s výdrž / 10s vis)", serie: 3, pauza_s: 60 }
+      ct:
+        typ: beh
+        kroky:
+          - { krok: beh, cas_min: 35, popis: "volný běh" }
+      pa: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
+      so: { typ: volno }
+      ne:
+        typ: kontrolni_test
+        minima: { beh_12min_m: 2550, lehsedy_1min: 45 }
