@@ -10,6 +10,7 @@ Dostupné plány:
 
 ```
 plan/vtp-plan-muzi.yaml  →  push_plan.py  →  Garmin Connect (workouts + kalendář)  →  hodinky
+                                          ↘  .ics soubor  →  Google Kalendář
 ```
 
 - Běhy → structured running workouts (rozklusání, intervaly, tempo/SF cíle, výklus)
@@ -58,11 +59,38 @@ python push_plan.py --plan muzi --email tvuj@email.cz --password TveHeslo
 | Parametr | Popis |
 |---|---|
 | `--plan muzi` / `--plan zeny` | Který plán nahrát (výchozí: `muzi`) |
+| `--start YYYY-MM-DD` | Datum začátku (pondělí 1. týdne), přepíše `start_datum` v YAML |
 | `--weeks N` | Nahrát jen prvních N týdnů |
 | `--dry-run` | Jen výpis JSON, nic nenahrávat |
+| `--ics [soubor]` | Vygenerovat `.ics` pro Google Kalendář (výchozí: `vtp-plan.ics`) |
+| `--delete` | Smazat všechny `VTP-T*` workouty z Garmin Connect |
 | `--email` / `--password` | Přihlašovací údaje Garmin Connect |
 
 Skript je **idempotentní** — spustíš-li ho znovu, stávající workouty se smažou a nahrají znovu.
+
+## Export do Google Kalendáře
+
+Pokud chceš mít tréninky i v Google Kalendáři (přehled v telefonu, sdílení, notifikace):
+
+### 1. Vygeneruj ICS soubor
+
+```bash
+python push_plan.py --plan muzi --start 2026-06-16 --ics
+```
+
+Vznikne soubor `vtp-plan.ics` — jeden celodeňní záznam na každý tréninkový den s popisem cvičení.
+
+### 2. Importuj do Google Kalendáře
+
+1. Otevři [calendar.google.com](https://calendar.google.com)
+2. Vlevo dole klikni na **+** vedle „Další kalendáře" → **Vytvořit nový kalendář** (např. „VTP Trénink") — tréninky tak budeš mít odděleně a půjdou snadno skrýt nebo smazat
+3. Klikni na ozubené kolečko **⚙️** vpravo nahoře → **Nastavení**
+4. V levém menu vyber **Importovat a exportovat → Importovat**
+5. Klikni **Vybrat soubor**, vyber `vtp-plan.ics`
+6. V rozbalovacím menu zvol „VTP Trénink" (nebo jiný cílový kalendář)
+7. Klikni **Importovat**
+
+> **Poznámka:** ICS soubor se negeneruje automaticky při nahrávání do Garmin — spusť `--ics` zvlášť, kdykoli chceš kalendář aktualizovat.
 
 ## Struktura repozitáře
 

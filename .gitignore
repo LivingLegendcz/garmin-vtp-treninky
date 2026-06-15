@@ -5,3 +5,4 @@ __pycache__/
 .garmin_tokens/
 *.env
 .env
+*.ics

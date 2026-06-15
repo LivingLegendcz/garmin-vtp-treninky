@@ -84,6 +84,7 @@ DEN_CODE  = {"po": "PO", "ut": "UT", "st": "ST", "ct": "CT",
              "pa": "PA", "so": "SO", "ne": "NE"}
 DEN_DELTA = {"po": 0, "ut": 1, "st": 2, "ct": 3, "pa": 4, "so": 5, "ne": 6}
 TYP_CODE  = {"beh": "BEH", "silovy": "SIL", "kombinace": "KOM", "kontrolni_test": "TEST"}
+TYP_LABEL = {"beh": "Beh", "silovy": "Silovy trenink", "kombinace": "Kombinace", "kontrolni_test": "Kontrolni test"}
 
 # České názvy cviků pro popisky kroků na hodinkách
 CVIK_CS = {
@@ -654,6 +655,132 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
     print(f"\nCelkem nahráno: {total} treninkú.")
 
 
+# ── ICS export (Google Kalendář) ───────────────────────────────────────────────
+def _ics_fold(line):
+    """Rozdělí řádek na max 75 oktetů dle RFC 5545."""
+    encoded = line.encode("utf-8")
+    if len(encoded) <= 75:
+        return line + "\r\n"
+    result = []
+    while len(encoded) > 75:
+        split = 75
+        while split > 0 and (encoded[split] & 0xC0) == 0x80:
+            split -= 1
+        result.append(encoded[:split].decode("utf-8"))
+        encoded = b" " + encoded[split:]
+    result.append(encoded.decode("utf-8"))
+    return "\r\n".join(result) + "\r\n"
+
+
+def _ics_escape(text):
+    """Escapuje speciální znaky pro ICS hodnoty."""
+    return (text
+            .replace("\\", "\\\\")
+            .replace(";", "\\;")
+            .replace(",", "\\,")
+            .replace("\n", "\\n"))
+
+
+def _ics_description(day_data):
+    """Sestaví čitelný popis pro ICS událost podle typu tréninku."""
+    typ = day_data.get("typ", "")
+    if typ == "silovy":
+        parts = []
+        kola = day_data.get("kola")
+        if kola:
+            parts.append(f"Kola: {kola}")
+        for c in day_data.get("cviky", []):
+            key  = c.get("cvik", "")
+            name = CVIK_CS.get(key, key.replace("_", " ").capitalize())
+            serie = c.get("serie", 1)
+            if "opakovani" in c:
+                parts.append(f"{name}: {serie}x {c['opakovani']} opak.")
+            elif "cas_s" in c:
+                parts.append(f"{name}: {serie}x {c['cas_s']}s")
+            else:
+                parts.append(_cvik_label(c))
+        return "\n".join(parts)
+    if typ == "beh":
+        return _build_run_desc(day_data) or "Beh"
+    if typ == "kombinace":
+        parts = []
+        if day_data.get("cviky"):
+            parts.append(_build_strength_desc(day_data))
+        if day_data.get("kroky"):
+            run_desc = _build_run_desc(day_data)
+            if run_desc:
+                parts.append(run_desc)
+        return "\n".join(p for p in parts if p)
+    if typ == "kontrolni_test":
+        return "Kontrolni test:\n- 12min beh (max vzdalenost)\n- Leh-sedy 1 min\n- Kliky 30s"
+    return ""
+
+
+def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None, out_file="vtp-plan.ics"):
+    """Vygeneruje ICS soubor pro import do Google Kalendáře."""
+    plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
+    if not plan_file.exists():
+        print(f"CHYBA: soubor {plan_file} neexistuje.")
+        sys.exit(1)
+    with open(plan_file, encoding="utf-8") as f:
+        plan = yaml.safe_load(f)
+
+    if start_override:
+        start_date = datetime.date.fromisoformat(start_override)
+    else:
+        start_str = plan["meta"].get("start_datum")
+        if not start_str:
+            print("CHYBA: 'start_datum' neni nastaven v YAML. Pouzij --start YYYY-MM-DD.")
+            sys.exit(1)
+        start_date = datetime.date.fromisoformat(str(start_str))
+
+    ics_lines = []
+    ics_lines.append("BEGIN:VCALENDAR\r\n")
+    ics_lines.append("VERSION:2.0\r\n")
+    ics_lines.append("PRODID:-//VTP Treninkovy plan//CS\r\n")
+    ics_lines.append("CALSCALE:GREGORIAN\r\n")
+    ics_lines.append("METHOD:PUBLISH\r\n")
+
+    count = 0
+    for tyden_data in plan.get("tydny", []):
+        tyden = tyden_data["tyden"]
+        if weeks_limit and tyden > weeks_limit:
+            break
+        for den_key, day_data in tyden_data.get("dny", {}).items():
+            if not day_data:
+                continue
+            typ = day_data.get("typ", "volno")
+            if typ in ("volno", "aktivni_odpocinek"):
+                continue
+
+            date    = start_date + datetime.timedelta(
+                        days=(tyden - 1) * 7 + DEN_DELTA[den_key])
+            name    = (f"VTP-T{tyden:02d}-{DEN_CODE[den_key]}"
+                       f"-{TYP_CODE.get(typ, typ.upper())}")
+            label   = TYP_LABEL.get(typ, typ.replace("_", " ").capitalize())
+            summary = f"VTP T{tyden:02d} {DEN_CODE[den_key]} - {label}"
+            uid     = name.lower() + "@garmin-treninky"
+            desc    = _ics_description(day_data)
+            dtend   = date + datetime.timedelta(days=1)
+
+            ics_lines.append("BEGIN:VEVENT\r\n")
+            ics_lines.append(_ics_fold(f"UID:{uid}"))
+            ics_lines.append(_ics_fold(f"DTSTART;VALUE=DATE:{date.strftime('%Y%m%d')}"))
+            ics_lines.append(_ics_fold(f"DTEND;VALUE=DATE:{dtend.strftime('%Y%m%d')}"))
+            ics_lines.append(_ics_fold(f"SUMMARY:{summary}"))
+            if desc:
+                ics_lines.append(_ics_fold(f"DESCRIPTION:{_ics_escape(desc)}"))
+            ics_lines.append("END:VEVENT\r\n")
+            count += 1
+
+    ics_lines.append("END:VCALENDAR\r\n")
+
+    out_path = Path(out_file)
+    out_path.write_bytes("".join(ics_lines).encode("utf-8"))
+    print(f"Vygenerovano {count} udalosti -> {out_path.resolve()}")
+    print("Import: Google Calendar -> + (Dalsi kalendare) -> Importovat")
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 def main():
     p = argparse.ArgumentParser(
@@ -674,6 +801,8 @@ Příklady:
                    help="Nahrat jen prvnich N tydnu")
     p.add_argument("--dry-run",  action="store_true",
                    help="Jen výpis JSON, nic nenahrávat")
+    p.add_argument("--ics",     nargs="?", const="vtp-plan.ics", metavar="SOUBOR",
+                   help="Vygenerovat ICS soubor pro Google Kalendar (default: vtp-plan.ics)")
     p.add_argument("--delete",   action="store_true",
                    help="Smazat vsechny VTP-T* workouty z Garmin Connect (bez nahrani)")
     p.add_argument("--no-save",  action="store_true",
@@ -682,7 +811,14 @@ Příklady:
     p.add_argument("--password", default=None, help="Garmin Connect heslo")
     args = p.parse_args()
 
-    if args.delete:
+    if args.ics:
+        generate_ics(
+            plan_name=args.plan,
+            weeks_limit=args.weeks,
+            start_override=args.start,
+            out_file=args.ics,
+        )
+    elif args.delete:
         delete_vtp_workouts(args.email, args.password, args.no_save)
     else:
         push_plan(
