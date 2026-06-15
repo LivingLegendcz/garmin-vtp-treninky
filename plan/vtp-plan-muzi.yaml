@@ -12,7 +12,7 @@ meta:
   nazev: "VTP 12týdenní plán (muži)"
   zdroj: "https://doarmady.mo.gov.cz/priprava/vyrocni-telesne-prezkouseni/treninkovy-plan-pro-vyrocni-telesne-prezkouseni/muzi"
   pocet_tydnu: 12
-  start_datum: "2026-06-15"   # pondělí 1. týdne
+  start_datum: null   # doplnit pondělí 1. týdne (YYYY-MM-DD), nebo použít --start
   konvence_nazvu: "VTP-T{TT}-{DEN}-{TYP}"
 
 testy_minima:   # doporučená minima po kontrolních testech (neděle daného týdne)
