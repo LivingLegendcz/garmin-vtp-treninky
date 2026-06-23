@@ -53,31 +53,31 @@ EXERCISE_MAP = {
     "sklapovacky_plus_klik":             ("SIT_UP",         "V_UP"),
     "jizda_na_kole_vsede":               ("CRUNCH",         "BICYCLE_CRUNCH"),
     "rotace_trupu_vsede":                ("CORE",           "RUSSIAN_TWIST"),
-    "nuzky_vleze":                       ("CORE",           "FLUTTER_KICK"),
-    "prednozeni_vleze":                  ("CRUNCH",         "TOE_TOUCH"),
+    "nuzky_vleze":                       ("CORE",           "SCISSORS"),
+    "prednozeni_vleze":                  ("CRUNCH",         "TOE_TOUCH"),          # Garmin nema, kategorie CRUNCH se ulozi
     "plank_vydrz":                       ("PLANK",          "PLANK"),
     "plank":                             ("PLANK",          "PLANK"),
     "plank_na_boku":                     ("PLANK",          "SIDE_PLANK"),
     "plank_plus_lehsed":                 ("PLANK",          "PLANK"),
-    "extenze_zad":                       ("HYPEREXTENSION", "BACK_EXTENSION"),
-    "drep":                              ("SQUAT",          "BODY_WEIGHT_SQUAT"),
-    "drep_do_vyponu":                    ("SQUAT",          "SQUAT_TO_CALF_RAISE"),
+    "extenze_zad":                       ("HYPEREXTENSION", "BACK_EXTENSION"),     # Garmin nema, kategorie HYPEREXTENSION se ulozi
+    "drep":                              ("SQUAT",          "AIR_SQUAT"),
+    "drep_do_vyponu":                    ("SQUAT",          "SQUAT_TO_CALF_RAISE"), # Garmin nema, kategorie SQUAT se ulozi
     "drep_s_vyskokem":                   ("PLYO",           "JUMP_SQUAT"),
     "vyskok_z_podrepu":                  ("PLYO",           "JUMP_SQUAT"),
-    "podrep_vydrz":                      ("SQUAT",          "WALL_SIT"),
+    "podrep_vydrz":                      ("SQUAT",          "WALL_SIT"),           # Garmin nema, kategorie SQUAT se ulozi
     "vypad":                             ("LUNGE",          "LUNGE"),
     "chuze_do_vypadu":                   ("LUNGE",          "WALKING_LUNGE"),
-    "zabak":                             ("PLYO",           "BROAD_JUMP"),
+    "zabak":                             ("PLYO",           "BROAD_JUMP"),         # Garmin nema, kategorie PLYO se ulozi
     "vyskok_na_bednu":                   ("PLYO",           "BOX_JUMP"),
     "anglicak":                          ("TOTAL_BODY",     "BURPEE"),
     "panak":                             ("CARDIO",         "JUMPING_JACKS"),
-    "veslovani_vsede":                   ("ROW",            "SEATED_ROW"),
+    "veslovani_vsede":                   ("ROW",            "SEATED_CABLE_ROW"),
     "shyb":                              ("PULL_UP",        "PULL_UP"),
-    "shyb_negativni":                    ("PULL_UP",        "NEGATIVE_PULL_UP"),
-    "shyb_negativni_plus_klik":          ("PULL_UP",        "NEGATIVE_PULL_UP"),
-    "vis_pasivni":                       ("PULL_UP",        "DEAD_HANG"),
-    "vis_pritahovani_kolen":             ("CORE",           "HANGING_KNEE_RAISE"),
-    "vis_pritahovani_kolen_plus_lehsed": ("CORE",           "HANGING_KNEE_RAISE"),
+    "shyb_negativni":                    ("PULL_UP",        "CHIN_UP"),            # Nejblizsi dostupny cvik v Garmin DB
+    "shyb_negativni_plus_klik":          ("PULL_UP",        "CHIN_UP"),
+    "vis_pasivni":                       ("PULL_UP",        "NEUTRAL_GRIP_PULL_UP"),
+    "vis_pritahovani_kolen":             ("CORE",           "HANGING_KNEE_RAISE"), # Garmin nema, kategorie CORE se ulozi
+    "vis_pritahovani_kolen_plus_lehsed": ("CORE",           "HANGING_KNEE_RAISE"), # Garmin nema, kategorie CORE se ulozi
 }
 
 DEN_CODE  = {"po": "PO", "ut": "UT", "st": "ST", "ct": "CT",
@@ -284,7 +284,7 @@ def _step(stype, end_key, end_val=None, tgt="none", v1=None, v2=None,
     if desc:
         s["description"] = desc
     if ex_cat:
-        s["exerciseCategory"] = ex_cat
+        s["category"] = ex_cat
     if ex_name:
         s["exerciseName"] = ex_name
     return s
@@ -436,11 +436,11 @@ def build_test_workout(day_data, name):
 
 
 # ── Strength builder ───────────────────────────────────────────────────────────
-def _cvik_steps(c):
+def _cvik_steps(c, pauza_faktor=1.0):
     key     = c.get("cvik", "")
     cat, ex = EXERCISE_MAP.get(key, ("OTHER", key.upper()))
     desc    = _cvik_label(c)   # Czech name + count/time
-    pauza_s = _int_range(c.get("pauza_s", 60), default=60)
+    pauza_s = int(_int_range(c.get("pauza_s", 60), default=60) * pauza_faktor)
     serie   = _int_range(c.get("serie", 1))
     steps   = []
 
@@ -467,15 +467,19 @@ def _cvik_steps(c):
     return steps
 
 
-def build_strength_workout(day_data, name):
+def build_strength_workout(day_data, name, pauza_faktor=1.0):
     cviky       = day_data.get("cviky", [])
     kola        = _int_range(day_data.get("kola", 1))
-    pauza_kola  = day_data.get("pauza_mezi_koly_s", 120)
+    pauza_kola  = int(day_data.get("pauza_mezi_koly_s", 120) * pauza_faktor)
     po_treninku = day_data.get("po_treninku", [])
 
     round_steps = []
     for c in cviky:
-        round_steps.extend(_cvik_steps(c))
+        if c.get("krok") == "pauza":
+            secs = int((c.get("cas_s") or _int_range(c.get("cas_min", 2)) * 60) * pauza_faktor)
+            round_steps.append(_step("rest", "time", secs, desc="Pauza"))
+        else:
+            round_steps.extend(_cvik_steps(c, pauza_faktor))
 
     if kola > 1 and round_steps:
         round_steps.append(_step("rest", "time", pauza_kola,
@@ -485,7 +489,7 @@ def build_strength_workout(day_data, name):
         top_steps = round_steps
 
     for c in po_treninku:
-        top_steps.extend(_cvik_steps(c))
+        top_steps.extend(_cvik_steps(c, pauza_faktor))
 
     desc = _build_strength_desc(day_data)
     extra = day_data.get("kroky_pred") or day_data.get("poznamka")
@@ -495,15 +499,15 @@ def build_strength_workout(day_data, name):
 
 
 # ── Combo builder ──────────────────────────────────────────────────────────────
-def build_combo_workout(day_data, name):
+def build_combo_workout(day_data, name, pauza_faktor=1.0):
     bloky      = day_data.get("bloky", [])
     kola       = _int_range(day_data.get("kola", 1))
-    pauza_kola = day_data.get("pauza_mezi_koly_s", 180)
+    pauza_kola = int(day_data.get("pauza_mezi_koly_s", 180) * pauza_faktor)
     round_steps = []
 
     for b in bloky:
         if "cvik" in b:
-            round_steps.extend(_cvik_steps(b))
+            round_steps.extend(_cvik_steps(b, pauza_faktor))
         elif b.get("krok") == "beh":
             raw = b.get("vzdalenost_km")
             if raw:
@@ -528,16 +532,16 @@ def build_combo_workout(day_data, name):
 
 
 # ── Dispatch ───────────────────────────────────────────────────────────────────
-def day_to_workout(day_data, name):
+def day_to_workout(day_data, name, pauza_faktor=1.0):
     typ = day_data.get("typ", "volno")
     if typ in ("volno", "aktivni_odpocinek"):
         return None
     if typ == "beh":
         return build_running_workout(day_data, name)
     if typ == "silovy":
-        return build_strength_workout(day_data, name)
+        return build_strength_workout(day_data, name, pauza_faktor)
     if typ == "kombinace":
-        return build_combo_workout(day_data, name)
+        return build_combo_workout(day_data, name, pauza_faktor)
     if typ == "kontrolni_test":
         return build_test_workout(day_data, name)
     print(f"  [WARN] Neznamý typ '{typ}' pro {name} - preskoceno")
@@ -575,8 +579,75 @@ def delete_vtp_workouts(email=None, password=None, no_save=False):
     print(f"\nSmazáno celkem: {len(vtp)} workoutu.")
 
 
+def fetch_garmin_cviky(api, output_file="cviky-garmin.json"):
+    """Stáhne seznam všech cviků z Garmin Connect a uloží do JSON."""
+    print("Stahuji seznam cviků z Garmin Connect...")
+    try:
+        cats_raw = api.connectapi("/workout-service/workout/exercise/categories")
+    except Exception as e:
+        print(f"CHYBA při stahování kategorií: {e}")
+        sys.exit(1)
+
+    if not isinstance(cats_raw, list):
+        print("Neočekávaný formát odpovědi (není list). Raw odpověď:")
+        print(json.dumps(cats_raw, ensure_ascii=False, indent=2)[:2000])
+        sys.exit(1)
+
+    result = {}
+    for cat in cats_raw:
+        cat_key = cat.get("exerciseCategoryKey") or cat.get("key") or str(cat)
+        cat_id  = cat.get("exerciseCategoryId") or cat.get("id")
+        try:
+            names_raw = api.connectapi(
+                "/workout-service/workout/exercise/names",
+                params={"categoryId": cat_id}
+            )
+            result[cat_key] = [
+                n.get("exerciseNameKey") or n.get("key") or str(n)
+                for n in (names_raw if isinstance(names_raw, list) else [])
+            ]
+        except Exception:
+            result[cat_key] = []
+
+    out_path = Path(output_file)
+    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    total = sum(len(v) for v in result.values())
+    print(f"Uloženo {len(result)} kategorií, {total} cviků -> {out_path.resolve()}")
+
+
+def validate_exercise_map(garmin_json_path):
+    """Ověří EXERCISE_MAP proti staženému JSON s Garmin cviky."""
+    p = Path(garmin_json_path)
+    if not p.exists():
+        print(f"CHYBA: soubor {p} nenalezen. Spusť nejdřív --fetch-cviky.")
+        sys.exit(1)
+    with open(p, encoding="utf-8") as f:
+        garmin_cviky = json.load(f)
+
+    known = {(cat, name) for cat, names in garmin_cviky.items() for name in names}
+
+    ok = err = 0
+    for cvik_cs, (cat, name) in sorted(EXERCISE_MAP.items()):
+        if (cat, name) in known:
+            print(f"  OK  {cvik_cs}: {cat} / {name}")
+            ok += 1
+        else:
+            candidates = garmin_cviky.get(cat, [])
+            suggestion = next(
+                (c for c in candidates if name in c or c in name), None
+            ) or (candidates[0] if candidates else None)
+            hint = f"  --> zkus: {suggestion}" if suggestion else "  (kategorie nenalezena)"
+            print(f"  ERR {cvik_cs}: {cat} / {name} -- NENALEZENO{hint}")
+            err += 1
+
+    print(f"\nVýsledek: {ok} OK, {err} chyb z {ok + err} cviků.")
+    if err:
+        print("Uprav EXERCISE_MAP v push_plan.py dle výše.")
+
+
 def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
-              email=None, password=None, no_save=False, start_override=None):
+              email=None, password=None, no_save=False, start_override=None,
+              pauza_faktor=1.0, from_week=1):
     plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
     if not plan_file.exists():
         print(f"CHYBA: soubor {plan_file} neexistuje.")
@@ -599,6 +670,9 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
 
     _validate_start(start_date)
 
+    if pauza_faktor != 1.0:
+        print(f"Zkrácení pauz na {pauza_faktor*100:.0f}% (--pauza-faktor {pauza_faktor})")
+
     api = None
     existing_by_name = {}
     if not dry_run:
@@ -614,6 +688,8 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
         tyden = tyden_data["tyden"]
         if weeks_limit and tyden > weeks_limit:
             break
+        if tyden < from_week:
+            continue
 
         print(f"\n-- Tyden {tyden} --")
         for den_key, day_data in tyden_data.get("dny", {}).items():
@@ -627,7 +703,7 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
                         days=(tyden - 1) * 7 + DEN_DELTA[den_key])
             name    = (f"VTP-T{tyden:02d}-{DEN_CODE[den_key]}"
                        f"-{TYP_CODE.get(typ, typ.upper())}")
-            workout = day_to_workout(day_data, name)
+            workout = day_to_workout(day_data, name, pauza_faktor)
             if workout is None:
                 continue
 
@@ -888,9 +964,22 @@ Příklady:
                    help="Neukladat Garmin token na disk (pouzij pro jednourazove spusteni)")
     p.add_argument("--email",    default=None, help="Garmin Connect e-mail")
     p.add_argument("--password", default=None, help="Garmin Connect heslo")
+    p.add_argument("--pauza-faktor", type=float, default=1.0, metavar="FLOAT",
+                   help="Násobitel pauz (default 1.0; pro pasivní odpočinek doporučeno 0.5)")
+    p.add_argument("--fetch-cviky", nargs="?", const="cviky-garmin.json", metavar="SOUBOR",
+                   help="Stáhne seznam cviků z Garmin Connect do JSON (default: cviky-garmin.json)")
+    p.add_argument("--validate-cviky", default=None, metavar="SOUBOR",
+                   help="Ověří EXERCISE_MAP proti staženému JSON (výstup --fetch-cviky)")
+    p.add_argument("--od-tydne", type=int, default=1, metavar="N",
+                   help="Začít nahrávat od týdne N (přeskočí týdny 1..N-1); default: 1")
     args = p.parse_args()
 
-    if args.ics:
+    if args.validate_cviky:
+        validate_exercise_map(args.validate_cviky)
+    elif args.fetch_cviky is not None:
+        api = _connect(args.email, args.password, args.no_save)
+        fetch_garmin_cviky(api, args.fetch_cviky)
+    elif args.ics:
         generate_ics(
             plan_name=args.plan,
             weeks_limit=args.weeks,
@@ -909,6 +998,8 @@ Příklady:
             password=args.password,
             no_save=args.no_save,
             start_override=args.start,
+            pauza_faktor=args.pauza_faktor,
+            from_week=args.od_tydne,
         )
 
 
