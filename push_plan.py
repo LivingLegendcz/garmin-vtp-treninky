@@ -39,6 +39,12 @@ except ImportError:
 PLAN_DIR  = Path(__file__).parent / "plan"
 TOKEN_DIR = Path.home() / ".garmin_tokens"
 
+# ── HR zóny / max. SF (naplní se po přihlášení nebo z --max-hr) ─────────────────
+# HR_ZONES: dict {"max_hr": int, "floors": [z1..z5], "method": str} nebo None
+HR_ZONES = None
+MAX_HR   = None
+_HR_WARNED = False   # aby se varování "neznámá max. SF" vypsalo jen jednou
+
 # ── Mapování cviků --> (Garmin category, Garmin exerciseName) ─────────────────
 EXERCISE_MAP = {
     "klik":                              ("PUSH_UP",        "PUSH_UP"),
@@ -177,21 +183,35 @@ def _int_range(val, default=1):
 
 
 def _parse_target(cil):
-    """Parsuje cíl ('60-70 % SFmax', 'tempo 4:30/km') -> (tgt_key, val1, val2)."""
+    """Parsuje cíl -> (tgt_key, val1, val2).
+
+    Vrací jeden z:
+      ("none",   None, None)            - bez cíle
+      ("hr_pct", lo,   hi)              - PROCENTNÍ rozsah % max. SF (NE bpm!)
+      ("pace",   mps_lo, mps_hi)        - tempo v m/s
+
+    Pozn.: '% rychlosti' a '% úsilí' jsou rychlost/úsilí (sprint), NE srdeční tep
+    -> vracíme "none" (popisek zůstane v labelu).
+    """
     if not cil:
         return "none", None, None
     s = str(cil)
+    low = s.lower()
 
-    # Rozsah %: "60-70 % SFmax"
+    # Sprint: "90 % max rychlosti" / "90 % max úsilí" -> rychlost/úsilí, NE tep
+    if "rychlost" in low or "úsil" in low or "usil" in low:
+        return "none", None, None
+
+    # Rozsah %: "60-70 % SFmax" -> procentní rozsah
     m = re.search(r"(\d+)\s*[-]\s*(\d+)\s*%", s)
     if m:
-        return "hr", int(m.group(1)), int(m.group(2))
+        return "hr_pct", int(m.group(1)), int(m.group(2))
 
-    # Jedno %: "75 % SFmax" / "85 % max"
+    # Jedno %: "75 % SFmax" / "85 % max" / "80 %" -> procento ±5 (jako dosud, ale jako %)
     m = re.search(r"(\d+)\s*%", s)
     if m:
         pct = int(m.group(1))
-        return "hr", max(50, pct - 5), pct + 5
+        return "hr_pct", max(50, pct - 5), pct + 5
 
     # Tempo "4:30/km" nebo "do 3:50"
     m = re.search(r"(\d+):(\d+)(?:/km)?", s)
@@ -201,6 +221,61 @@ def _parse_target(cil):
         return "pace", round(mps * 0.95, 4), round(mps * 1.05, 4)
 
     return "none", None, None
+
+
+def _zone_for_pct(pct):
+    """Mapuje % max. SF na číslo zóny (1-5) dle defaultních prahů.
+    Z1 <60, Z2 60-70, Z3 70-80, Z4 80-90, Z5 >=90."""
+    if pct < 60:
+        return 1
+    if pct < 70:
+        return 2
+    if pct < 80:
+        return 3
+    if pct < 90:
+        return 4
+    return 5
+
+
+def _resolve_hr_pct(lo, hi):
+    """Převede procentní rozsah (% max. SF) na (bpm_low, bpm_high, zone_number).
+
+    Priorita zdroje hodnot:
+      1) reálné HR zóny z Connectu (HR_ZONES) -> bpm hranice odpovídající zóny
+      2) jen známá max. SF (MAX_HR / --max-hr) -> bpm = pct/100 * max_hr
+      3) nic -> (None, None, None) + jednorázové varování
+    """
+    global _HR_WARNED
+    if lo is None or hi is None:
+        return None, None, None
+
+    central = (lo + hi) / 2.0
+    zone = _zone_for_pct(central)
+
+    # 1) Reálné zóny z Connectu -> použij skutečné bpm hranice té zóny
+    if HR_ZONES and HR_ZONES.get("floors"):
+        floors = HR_ZONES["floors"]           # [z1, z2, z3, z4, z5] floors v bpm
+        max_hr = HR_ZONES.get("max_hr")
+        bpm_low = floors[zone - 1]
+        # horní hranice = floor další zóny; pro Z5 = max. SF
+        if zone < 5:
+            bpm_high = floors[zone]
+        else:
+            bpm_high = max_hr if max_hr else floors[4]
+        return int(bpm_low), int(bpm_high), zone
+
+    # 2) Známá jen max. SF -> spočítej bpm přímo z procent
+    if MAX_HR:
+        bpm_low  = round(lo / 100.0 * MAX_HR)
+        bpm_high = round(hi / 100.0 * MAX_HR)
+        return int(bpm_low), int(bpm_high), zone
+
+    # 3) Nic neznámého -> bez HR cíle
+    if not _HR_WARNED:
+        print("  [WARN] Neznámá max. SF ani HR zóny - HR cíle budou vynechány."
+              " Použij --max-hr N nebo se přihlas (zóny z Garmin Connect).")
+        _HR_WARNED = True
+    return None, None, None
 
 
 def _cvik_label(c):
@@ -254,10 +329,12 @@ def _build_run_desc(day_data):
                     inner.append(f"klus {sub.get('cas_s', sub.get('cas_min','?'))}s")
             parts.append(f"{pocet}x ({' + '.join(inner)})")
         elif kr in ("beh", "usek"):
+            cil = k.get("cil")
+            cil_txt = (" " + cil + _hr_label_suffix(cil)) if cil else ""
             if "vzdalenost_m" in k:
-                parts.append(f"Beh {k['vzdalenost_m']}m{(' ' + k['cil']) if k.get('cil') else ''}")
+                parts.append(f"Beh {k['vzdalenost_m']}m{cil_txt}")
             elif "cas_min" in k:
-                parts.append(f"Beh {k['cas_min']}min{(' ' + k['cil']) if k.get('cil') else ''}")
+                parts.append(f"Beh {k['cas_min']}min{cil_txt}")
         elif kr == "pyramida":
             useky = k.get("useky_m", [])
             parts.append(f"Pyramida: {'-'.join(str(u) for u in useky)}m")
@@ -268,7 +345,7 @@ def _build_run_desc(day_data):
 
 
 def _step(stype, end_key, end_val=None, tgt="none", v1=None, v2=None,
-          desc=None, ex_cat=None, ex_name=None, order=1):
+          desc=None, ex_cat=None, ex_name=None, order=1, zone=None):
     s = {
         "type": "ExecutableStepDTO",
         "stepOrder": order,
@@ -281,6 +358,8 @@ def _step(stype, end_key, end_val=None, tgt="none", v1=None, v2=None,
         s["targetValueOne"] = v1
     if v2 is not None:
         s["targetValueTwo"] = v2
+    if zone is not None:
+        s["zoneNumber"] = zone
     if desc:
         s["description"] = desc
     if ex_cat:
@@ -336,6 +415,38 @@ def _envelope(name, sport_key, steps, description=None):
 
 
 # ── Running builder ────────────────────────────────────────────────────────────
+def _resolve_step_target(cil):
+    """Z YAML cíle vrátí (tgt_key, v1, v2, zone, label_suffix) pro běžecký krok.
+
+    - hr_pct  -> převede na bpm + zónu (dle reálných zón / max. SF).
+                 Pokud se nepodaří, vrátí no.target, ale popisek % zachová.
+    - pace    -> beze změny.
+    - none    -> bez cíle (label_suffix prázdný).
+    label_suffix je text k doplnění do popisku kroku, např. " [Z2, 114-133]".
+    """
+    tgt, a, b = _parse_target(cil)
+
+    if tgt == "hr_pct":
+        bpm_low, bpm_high, zone = _resolve_hr_pct(a, b)
+        if bpm_low is not None:
+            suffix = f" [Z{zone}, {bpm_low}-{bpm_high}]"
+            return "hr", bpm_low, bpm_high, zone, suffix
+        # nešlo přepočítat (neznámá max. SF) -> bez HR cíle, popis % zůstává v cil_str
+        return "none", None, None, None, ""
+
+    if tgt == "pace":
+        return "pace", a, b, None, ""
+
+    return "none", None, None, None, ""
+
+
+def _hr_label_suffix(cil):
+    """Vrátí popisek typu ' [Z2, 114-133]' pro HR cíl, jinak prázdný řetězec.
+    Používá se v ICS / popisech (ne ve struktuře kroku)."""
+    _, _, _, _, suffix = _resolve_step_target(cil)
+    return suffix
+
+
 def _run_steps(kroky):
     out = []
 
@@ -343,7 +454,7 @@ def _run_steps(kroky):
         krok = k.get("krok", "")
         cil  = k.get("cil")
         desc = k.get("popis") or k.get("poznamka")
-        tgt, v1, v2 = _parse_target(cil)
+        tgt, v1, v2, zone, tgt_suffix = _resolve_step_target(cil)
 
         if krok == "rozklusani":
             secs = _int_range(k.get("cas_min", 10)) * 60
@@ -354,24 +465,25 @@ def _run_steps(kroky):
             out.append(_step("cooldown", "time", secs, desc=desc or "Vyklus"))
 
         elif krok in ("beh", "usek"):
-            cil_str = f" ({cil})" if cil else ""
+            cil_str = f" ({cil}){tgt_suffix}" if cil else ""
             if "vzdalenost_m" in k:
-                label = desc or f"Beh {k['vzdalenost_m']}m{cil_str}"
-                out.append(_step("interval", "dist", k["vzdalenost_m"], tgt, v1, v2, label))
+                label = (desc + tgt_suffix) if desc else f"Beh {k['vzdalenost_m']}m{cil_str}"
+                out.append(_step("interval", "dist", k["vzdalenost_m"], tgt, v1, v2, label, zone=zone))
             elif "vzdalenost_km" in k:
                 raw = k["vzdalenost_km"]
                 km = _int_range(raw) if isinstance(raw, str) and "-" in raw else float(raw)
-                label = desc or f"Beh {raw}km{cil_str}"
-                out.append(_step("interval", "dist", int(km * 1000), tgt, v1, v2, label))
+                label = (desc + tgt_suffix) if desc else f"Beh {raw}km{cil_str}"
+                out.append(_step("interval", "dist", int(km * 1000), tgt, v1, v2, label, zone=zone))
             elif "cas_min" in k:
                 secs = _int_range(k["cas_min"]) * 60
-                label = desc or f"Beh {k['cas_min']}min{cil_str}"
-                out.append(_step("interval", "time", secs, tgt, v1, v2, label))
+                label = (desc + tgt_suffix) if desc else f"Beh {k['cas_min']}min{cil_str}"
+                out.append(_step("interval", "time", secs, tgt, v1, v2, label, zone=zone))
             elif "cas_s" in k:
-                label = desc or f"Beh {k['cas_s']}s{cil_str}"
-                out.append(_step("interval", "time", k["cas_s"], tgt, v1, v2, label))
+                label = (desc + tgt_suffix) if desc else f"Beh {k['cas_s']}s{cil_str}"
+                out.append(_step("interval", "time", k["cas_s"], tgt, v1, v2, label, zone=zone))
             else:
-                out.append(_step("interval", "lap", desc=desc or f"Beh{cil_str}"))
+                out.append(_step("interval", "lap", tgt=tgt, v1=v1, v2=v2,
+                                 desc=(desc + tgt_suffix) if desc else f"Beh{cil_str}", zone=zone))
 
         elif krok == "chuze":
             secs = k.get("cas_s") or _int_range(k.get("cas_min", 1)) * 60
@@ -566,6 +678,115 @@ def _connect(email=None, password=None, no_save=False):
     return api
 
 
+def _get_hr_zones(api):
+    """Načte HR zóny z Garmin Connectu a vrátí dict pro běh:
+        {"max_hr": int, "floors": [z1..z5], "method": str}
+    Preferuje sport RUNNING, jinak DEFAULT. Při chybě / chybějících datech
+    vrátí None a vypíše varování. Tolerantní k variantám názvů polí.
+    """
+    try:
+        data = api.connectapi("/biometric-service/heartRateZones")
+    except Exception as e:
+        print(f"  [WARN] Nepodařilo se načíst HR zóny z Connectu: {e}")
+        return None
+
+    # Endpoint vrací seznam objektů (jeden na sport: DEFAULT/RUNNING/CYCLING),
+    # ale buď defenzivní i vůči jednomu objektu / jinému obalu.
+    entries = []
+    if isinstance(data, list):
+        entries = data
+    elif isinstance(data, dict):
+        # možný obal typu {"heartRateZones": [...]} nebo přímo jeden záznam
+        if isinstance(data.get("heartRateZones"), list):
+            entries = data["heartRateZones"]
+        else:
+            entries = [data]
+    if not entries:
+        print("  [WARN] HR zóny z Connectu prázdné / neočekávaný formát.")
+        return None
+
+    def _sport_of(e):
+        return str(e.get("sport") or e.get("zone") or e.get("sportType") or "").upper()
+
+    chosen = (next((e for e in entries if _sport_of(e) == "RUNNING"), None)
+              or next((e for e in entries if _sport_of(e) == "DEFAULT"), None)
+              or entries[0])
+
+    # max. SF (tolerantní k variantám názvů)
+    max_hr = (chosen.get("maxHeartRateUsed") or chosen.get("maxHeartRate")
+              or chosen.get("maxHr"))
+
+    # hranice zón: buď zone{N}Floor, nebo seznam s min/max
+    floors = []
+    if all(chosen.get(f"zone{i}Floor") is not None for i in range(1, 6)):
+        floors = [int(chosen[f"zone{i}Floor"]) for i in range(1, 6)]
+    else:
+        zlist = chosen.get("heartRateZones") or chosen.get("zones")
+        if isinstance(zlist, list) and zlist:
+            for z in zlist[:5]:
+                lo = (z.get("floor") if isinstance(z, dict) else None)
+                if lo is None and isinstance(z, dict):
+                    lo = z.get("min") or z.get("low") or z.get("secsInZone")
+                if lo is not None:
+                    floors.append(int(lo))
+
+    method = (chosen.get("trainingMethod") or chosen.get("method")
+              or chosen.get("zoneCalculationMethod"))
+
+    if not floors and not max_hr:
+        print("  [WARN] HR zóny: nenalezena ani max. SF, ani hranice zón.")
+        return None
+
+    return {
+        "max_hr": int(max_hr) if max_hr else None,
+        "floors": floors,           # [z1..z5] floors v bpm (může být prázdné)
+        "method": method,
+        "sport":  _sport_of(chosen),
+    }
+
+
+def _apply_max_hr(max_hr):
+    """Nastaví modulový MAX_HR (ruční override z --max-hr)."""
+    global MAX_HR
+    if max_hr:
+        MAX_HR = int(max_hr)
+
+
+def _load_hr_state(api, max_hr_override=None):
+    """Naplní modulové HR_ZONES / MAX_HR a vypíše přehled.
+
+    Priorita: --max-hr (override) > zóny z Connectu > nic (varování při použití).
+    Po načtení zón z Connectu má --max-hr přednost jako hodnota max. SF.
+    """
+    global HR_ZONES, MAX_HR
+
+    if api is not None:
+        zones = _get_hr_zones(api)
+        if zones:
+            HR_ZONES = zones
+            if zones.get("max_hr"):
+                MAX_HR = zones["max_hr"]
+
+    # --max-hr má přednost (přepíše i hodnotu z Connectu)
+    if max_hr_override:
+        MAX_HR = int(max_hr_override)
+        if HR_ZONES:
+            HR_ZONES["max_hr"] = MAX_HR
+
+    # Přehled
+    if HR_ZONES and HR_ZONES.get("floors"):
+        floors = HR_ZONES["floors"]
+        zsport = HR_ZONES.get("sport", "?")
+        zmeth  = HR_ZONES.get("method", "?")
+        print(f"HR zóny ({zsport}, metoda {zmeth}): max. SF {MAX_HR or '?'} bpm,"
+              f" hranice Z1-Z5 = {floors} bpm")
+    elif MAX_HR:
+        print(f"HR cíle počítány z max. SF {MAX_HR} bpm (bez reálných zón z Connectu).")
+    else:
+        print("HR cíle: neznámá max. SF ani zóny - běžecké HR cíle budou vynechány."
+              " (Použij --max-hr N nebo se přihlas.)")
+
+
 def delete_vtp_workouts(email=None, password=None, no_save=False):
     """Smaže všechny workouty začínající VTP-T z Garmin Connect."""
     print("Prihlasování do Garmin Connect...")
@@ -647,7 +868,7 @@ def validate_exercise_map(garmin_json_path):
 
 def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
               email=None, password=None, no_save=False, start_override=None,
-              pauza_faktor=1.0, from_week=1):
+              pauza_faktor=1.0, from_week=1, max_hr=None):
     plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
     if not plan_file.exists():
         print(f"CHYBA: soubor {plan_file} neexistuje.")
@@ -678,10 +899,15 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
     if not dry_run:
         print("Prihlasování do Garmin Connect...")
         api = _connect(email, password, no_save)
-        print(f"Prihlasen. Nacitám existující workouty...")
+        print(f"Prihlasen. Nacitám HR zóny a existující workouty...")
+        # HR stav MUSÍ být načten PŘED stavbou workoutů (běžecké HR cíle se z něj počítají)
+        _load_hr_state(api, max_hr_override=max_hr)
         existing = api.get_workouts(0, 1000)
         existing_by_name = {w["workoutName"]: w["workoutId"] for w in existing}
         print(f"  nalezeno {len(existing_by_name)} existujících workoutu")
+    else:
+        # dry-run: zóny z Connectu nedostupné, využij jen --max-hr (pokud zadáno)
+        _load_hr_state(None, max_hr_override=max_hr)
 
     total = 0
     for tyden_data in plan.get("tydny", []):
@@ -972,6 +1198,9 @@ Příklady:
                    help="Ověří EXERCISE_MAP proti staženému JSON (výstup --fetch-cviky)")
     p.add_argument("--od-tydne", type=int, default=1, metavar="N",
                    help="Začít nahrávat od týdne N (přeskočí týdny 1..N-1); default: 1")
+    p.add_argument("--max-hr", type=int, default=None, metavar="N",
+                   help="Ruční max. SF pro výpočet HR cílů (override / fallback pro --dry-run)."
+                        " Priorita: --max-hr > zóny z Garmin Connect > bez HR cíle")
     args = p.parse_args()
 
     if args.validate_cviky:
@@ -980,6 +1209,8 @@ Příklady:
         api = _connect(args.email, args.password, args.no_save)
         fetch_garmin_cviky(api, args.fetch_cviky)
     elif args.ics:
+        # Pro ICS popisky využijeme --max-hr (jinak HR cíle zůstanou jen jako %)
+        _apply_max_hr(args.max_hr)
         generate_ics(
             plan_name=args.plan,
             weeks_limit=args.weeks,
@@ -1000,6 +1231,7 @@ Příklady:
             start_override=args.start,
             pauza_faktor=args.pauza_faktor,
             from_week=args.od_tydne,
+            max_hr=args.max_hr,
         )
 
 
