@@ -43,6 +43,11 @@ python push_plan.py --plan muzi --start 2026-06-16 --ics
 python push_plan.py --plan muzi --start 2026-06-16 --ics --time 06:30
 ```
 
+**Export the REAL Garmin calendar (after manual rescheduling on Garmin; from today onward, `--start`/`--weeks` ignored):**
+```bash
+python push_plan.py --ics-garmin
+```
+
 **Delete all VTP-T\* workouts from Garmin:**
 ```bash
 python push_plan.py --delete --email user@example.com --password secret
@@ -79,7 +84,8 @@ Everything lives in a single script `push_plan.py` (~917 lines). There are no mo
 | `_run_steps()` | Recursively converts YAML `kroky` into Garmin step dicts (handles `opakovat` repeat groups) |
 | `_cvik_steps()` | Converts a single exercise definition into Garmin step dicts using `EXERCISE_MAP` |
 | `delete_vtp_workouts()` | Fetches all workouts, deletes those matching `VTP-T*` |
-| `generate_ics()` | Produces RFC 5545 `.ics` content from the plan |
+| `generate_ics()` | Produces RFC 5545 `.ics` content from the YAML plan |
+| `generate_ics_from_garmin()` | Produces `.ics` from the workouts actually scheduled on the Garmin calendar (`/calendar-service`), from today onward; descriptions looked up from YAML by workout name |
 
 ### YAML plan schema
 

@@ -62,7 +62,8 @@ python push_plan.py --plan muzi --email tvuj@email.cz --password TveHeslo
 | `--start YYYY-MM-DD` | Datum začátku (pondělí 1. týdne), přepíše `start_datum` v YAML |
 | `--weeks N` | Nahrát jen prvních N týdnů |
 | `--dry-run` | Jen výpis JSON, nic nenahrávat |
-| `--ics [soubor]` | Vygenerovat `.ics` pro Google Kalendář (výchozí: `vtp-plan.ics`) |
+| `--ics [soubor]` | Vygenerovat `.ics` pro Google Kalendář z YAML plánu (výchozí: `vtp-plan.ics`) |
+| `--ics-garmin [soubor]` | Vygenerovat `.ics` ze **skutečně naplánovaných** tréninků na Garmin kalendáři, od dneška dál (výchozí: `vtp-garmin.ics`) |
 | `--time HH:MM` | Čas začátku tréninku v ICS (bez toho jsou události celodenní) |
 | `--delete` | Smazat všechny `VTP-T*` workouty z Garmin Connect |
 | `--email` / `--password` | Přihlašovací údaje Garmin Connect |
@@ -96,6 +97,17 @@ Vznikne soubor `vtp-plan.ics` — jeden záznam na každý tréninkový den s po
 7. Klikni **Importovat**
 
 > **Poznámka:** ICS soubor se negeneruje automaticky při nahrávání do Garmin — spusť `--ics` zvlášť, kdykoli chceš kalendář aktualizovat.
+
+### Export skutečného Garmin kalendáře (`--ics-garmin`)
+
+Pokud sis tréninky na Garminu ručně přeházel (posunuté týdny, přesunuté dny), `--ics` z YAML plánu už neodpovídá realitě. Použij `--ics-garmin` — přihlásí se do Garmin Connect, načte **skutečně naplánované** `VTP-T*` tréninky od dneška dál a vygeneruje z nich `vtp-garmin.ics`:
+
+```bash
+python push_plan.py --ics-garmin
+python push_plan.py --ics-garmin --time 06:30   # s pevným časem a odhadovanou délkou
+```
+
+Autoritou pro data je Garmin kalendář — `--start` a `--weeks` se ignorují. Popisy cvičení se dohledávají z YAML plánu podle názvu workoutu; HR cíle se přepočtou z reálných zón v Connectu. Import do Google Kalendáře je stejný jako výše (krok 2).
 
 ## Struktura repozitáře
 

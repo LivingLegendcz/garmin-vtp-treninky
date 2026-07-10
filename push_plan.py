@@ -92,6 +92,11 @@ DEN_DELTA = {"po": 0, "ut": 1, "st": 2, "ct": 3, "pa": 4, "so": 5, "ne": 6}
 TYP_CODE  = {"beh": "BEH", "silovy": "SIL", "kombinace": "KOM", "kontrolni_test": "TEST"}
 TYP_LABEL = {"beh": "Beh", "silovy": "Silovy trenink", "kombinace": "Kombinace", "kontrolni_test": "Kontrolni test"}
 
+
+def _vtp_name(tyden, den_key, typ):
+    """Sestaví jednotný název workoutu: VTP-T{TT}-{DEN}-{TYP}."""
+    return f"VTP-T{tyden:02d}-{DEN_CODE[den_key]}-{TYP_CODE.get(typ, typ.upper())}"
+
 # České názvy cviků pro popisky kroků na hodinkách
 CVIK_CS = {
     "klik":                              "Kliky",
@@ -927,8 +932,7 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
 
             date    = start_date + datetime.timedelta(
                         days=(tyden - 1) * 7 + DEN_DELTA[den_key])
-            name    = (f"VTP-T{tyden:02d}-{DEN_CODE[den_key]}"
-                       f"-{TYP_CODE.get(typ, typ.upper())}")
+            name    = _vtp_name(tyden, den_key, typ)
             workout = day_to_workout(day_data, name, pauza_faktor)
             if workout is None:
                 continue
@@ -1045,6 +1049,39 @@ def _ics_escape(text):
             .replace("\n", "\\n"))
 
 
+def _parse_time_arg(start_time):
+    """Převede --time 'HH:MM' na datetime.time (None = celodenní události)."""
+    if not start_time:
+        return None
+    h, m = map(int, start_time.split(":"))
+    return datetime.time(h, m)
+
+
+def _ics_vevent(uid, summary, date, desc=None, t=None, duration_min=45):
+    """Sestaví řádky jednoho VEVENT bloku (list[str], řádky ukončené \\r\\n).
+
+    Bez `t` celodenní událost (VALUE=DATE, DTEND = den+1 dle RFC 5545),
+    s `t` časovaná událost ve floating local time, DTEND = start + duration_min.
+    """
+    lines = []
+    lines.append("BEGIN:VEVENT\r\n")
+    lines.append(_ics_fold(f"UID:{uid}"))
+    if t:
+        dt_start = datetime.datetime.combine(date, t)
+        dt_end   = dt_start + datetime.timedelta(minutes=duration_min)
+        lines.append(_ics_fold(f"DTSTART:{dt_start.strftime('%Y%m%dT%H%M%S')}"))
+        lines.append(_ics_fold(f"DTEND:{dt_end.strftime('%Y%m%dT%H%M%S')}"))
+    else:
+        dtend = date + datetime.timedelta(days=1)
+        lines.append(_ics_fold(f"DTSTART;VALUE=DATE:{date.strftime('%Y%m%d')}"))
+        lines.append(_ics_fold(f"DTEND;VALUE=DATE:{dtend.strftime('%Y%m%d')}"))
+    lines.append(_ics_fold(f"SUMMARY:{summary}"))
+    if desc:
+        lines.append(_ics_fold(f"DESCRIPTION:{_ics_escape(desc)}"))
+    lines.append("END:VEVENT\r\n")
+    return lines
+
+
 def _ics_description(day_data):
     """Sestaví čitelný popis pro ICS událost podle typu tréninku."""
     typ = day_data.get("typ", "")
@@ -1101,10 +1138,7 @@ def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None,
 
     _validate_start(start_date)
 
-    t = None
-    if start_time:
-        h, m = map(int, start_time.split(":"))
-        t = datetime.time(h, m)
+    t = _parse_time_arg(start_time)
 
     ics_lines = []
     ics_lines.append("BEGIN:VCALENDAR\r\n")
@@ -1127,29 +1161,14 @@ def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None,
 
             date    = start_date + datetime.timedelta(
                         days=(tyden - 1) * 7 + DEN_DELTA[den_key])
-            name    = (f"VTP-T{tyden:02d}-{DEN_CODE[den_key]}"
-                       f"-{TYP_CODE.get(typ, typ.upper())}")
+            name    = _vtp_name(tyden, den_key, typ)
             label   = TYP_LABEL.get(typ, typ.replace("_", " ").capitalize())
             summary = f"VTP T{tyden:02d} {DEN_CODE[den_key]} - {label}"
             uid     = name.lower() + "@garmin-treninky"
             desc    = _ics_description(day_data)
 
-            ics_lines.append("BEGIN:VEVENT\r\n")
-            ics_lines.append(_ics_fold(f"UID:{uid}"))
-            if t:
-                duration_min = _estimate_duration_min(day_data)
-                dt_start = datetime.datetime.combine(date, t)
-                dt_end   = dt_start + datetime.timedelta(minutes=duration_min)
-                ics_lines.append(_ics_fold(f"DTSTART:{dt_start.strftime('%Y%m%dT%H%M%S')}"))
-                ics_lines.append(_ics_fold(f"DTEND:{dt_end.strftime('%Y%m%dT%H%M%S')}"))
-            else:
-                dtend = date + datetime.timedelta(days=1)
-                ics_lines.append(_ics_fold(f"DTSTART;VALUE=DATE:{date.strftime('%Y%m%d')}"))
-                ics_lines.append(_ics_fold(f"DTEND;VALUE=DATE:{dtend.strftime('%Y%m%d')}"))
-            ics_lines.append(_ics_fold(f"SUMMARY:{summary}"))
-            if desc:
-                ics_lines.append(_ics_fold(f"DESCRIPTION:{_ics_escape(desc)}"))
-            ics_lines.append("END:VEVENT\r\n")
+            ics_lines.extend(_ics_vevent(uid, summary, date, desc=desc, t=t,
+                                         duration_min=_estimate_duration_min(day_data)))
             count += 1
 
     ics_lines.append("END:VCALENDAR\r\n")
@@ -1157,6 +1176,162 @@ def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None,
     out_path = Path(out_file)
     out_path.write_bytes("".join(ics_lines).encode("utf-8"))
     print(f"Vygenerovano {count} udalosti -> {out_path.resolve()}")
+    print("Import: Google Calendar -> + (Dalsi kalendare) -> Importovat")
+
+
+def _index_plan_by_name(plan):
+    """Mapuje VTP název workoutu -> info o dni v YAML plánu.
+
+    Slouží ke zpětnému dohledání popisu a odhadu délky podle názvu
+    tréninku naplánovaného na Garmin kalendáři (nezávisle na datu).
+    """
+    index = {}
+    for tyden_data in plan.get("tydny", []):
+        tyden = tyden_data["tyden"]
+        for den_key, day_data in tyden_data.get("dny", {}).items():
+            if not day_data:
+                continue
+            typ = day_data.get("typ", "volno")
+            if typ in ("volno", "aktivni_odpocinek"):
+                continue
+            index[_vtp_name(tyden, den_key, typ)] = {
+                "tyden": tyden,
+                "den_code": DEN_CODE[den_key],
+                "typ": typ,
+                "day_data": day_data,
+            }
+    return index
+
+
+def _next_month(y, m):
+    return (y + 1, 1) if m == 12 else (y, m + 1)
+
+
+def _fetch_garmin_vtp_events(api, start_date, end_date):
+    """Načte z Garmin kalendáře (/calendar-service) naplánované VTP-T* tréninky.
+
+    Iteruje měsíc po měsíci od start_date do end_date (včetně) a vrací
+    seřazený seznam {"date": date, "name": str}. JSON parsuje defenzivně
+    (tvar není oficiálně dokumentovaný). Duplicitní (name, date) tiše
+    slučuje — měsíční pohled obsahuje i okrajové dny sousedních měsíců.
+    """
+    events = {}
+    y, m = start_date.year, start_date.month
+    while (y, m) <= (end_date.year, end_date.month):
+        try:
+            data = api.get_scheduled_workouts(y, m)
+        except Exception as e:
+            print(f"  [WARN] Nepodarilo se nacist kalendar {y}-{m:02d}: {e}")
+            y, m = _next_month(y, m)
+            continue
+        items = data.get("calendarItems", []) if isinstance(data, dict) else []
+        for item in items:
+            item_type = str(item.get("itemType") or item.get("type") or "").lower()
+            if item_type and item_type != "workout":
+                continue
+            title = str(item.get("title") or item.get("workoutName")
+                        or item.get("name") or "").strip()
+            if not title.startswith("VTP-T"):
+                continue
+            date_str = item.get("date") or item.get("calendarDate")
+            if not date_str:
+                continue
+            try:
+                d = datetime.date.fromisoformat(str(date_str)[:10])
+            except ValueError:
+                continue
+            if start_date <= d <= end_date:
+                events[(title, d)] = {"date": d, "name": title}
+        y, m = _next_month(y, m)
+    return sorted(events.values(), key=lambda e: (e["date"], e["name"]))
+
+
+def generate_ics_from_garmin(plan_name="muzi", out_file="vtp-garmin.ics",
+                             start_time=None, email=None, password=None,
+                             no_save=False, max_hr=None):
+    """Vygeneruje ICS ze SKUTEČNĚ naplánovaných VTP-T* tréninků na Garmin
+    kalendáři (od dneška dál).
+
+    Autoritou pro data je Garmin kalendář — použij po ručním přeházení
+    termínů na Garminu, kdy lokální YAML + --start už neodpovídá realitě.
+    Popis a odhad délky se dohledávají zpětně z YAML plánu podle názvu.
+    """
+    plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
+    if not plan_file.exists():
+        print(f"CHYBA: soubor {plan_file} neexistuje.")
+        sys.exit(1)
+    with open(plan_file, encoding="utf-8") as f:
+        plan = yaml.safe_load(f)
+
+    day_index = _index_plan_by_name(plan)
+    t = _parse_time_arg(start_time)
+
+    print("Prihlasování do Garmin Connect...")
+    api = _connect(email, password, no_save)
+    # HR zóny z Connectu -> popisky dostanou reálné bpm místo % SFmax
+    _load_hr_state(api, max_hr_override=max_hr)
+
+    total_weeks = len(plan.get("tydny", []))
+    today = datetime.date.today()
+    # rezerva pro případ, že byl plán na Garminu posunut o pár týdnů dopředu
+    end_date = today + datetime.timedelta(weeks=total_weeks + 6)
+
+    print(f"Nacitám Garmin kalendar {today} az {end_date}...")
+    events = _fetch_garmin_vtp_events(api, today, end_date)
+    if not events:
+        print(f"Zadne naplanovane VTP-T* treninky v rozsahu {today} az {end_date}.")
+        return
+
+    ics_lines = []
+    ics_lines.append("BEGIN:VCALENDAR\r\n")
+    ics_lines.append("VERSION:2.0\r\n")
+    ics_lines.append("PRODID:-//VTP Treninkovy plan//CS\r\n")
+    ics_lines.append("CALSCALE:GREGORIAN\r\n")
+    ics_lines.append("METHOD:PUBLISH\r\n")
+
+    count = 0
+    seen_names = set()
+    weeks_found = set()
+    for ev in events:
+        name, date = ev["name"], ev["date"]
+        uid = name.lower() + "@garmin-treninky"
+        if name in seen_names:
+            # stejný workout naplánovaný vícekrát -> UID rozlišit datem,
+            # jinak by Google Kalendář při importu nechal jen jednu událost
+            uid = f"{name.lower()}-{date:%Y%m%d}@garmin-treninky"
+            print(f"  [WARN] {name}: naplanovan vickrat, dalsi vyskyt {date}.")
+        seen_names.add(name)
+
+        info = day_index.get(name)
+        if info:
+            day_data     = info["day_data"]
+            label        = TYP_LABEL.get(info["typ"],
+                                         info["typ"].replace("_", " ").capitalize())
+            summary      = f"VTP T{info['tyden']:02d} {info['den_code']} - {label}"
+            desc         = _ics_description(day_data)
+            duration_min = _estimate_duration_min(day_data)
+            weeks_found.add(info["tyden"])
+        else:
+            print(f"  [WARN] {name} ({date}): nenalezen v YAML planu"
+                  " - bez popisu, odhad delky 45 min.")
+            summary, desc, duration_min = name, "", 45
+
+        print(f"  {date}  {name}")
+        ics_lines.extend(_ics_vevent(uid, summary, date, desc=desc, t=t,
+                                     duration_min=duration_min))
+        count += 1
+
+    ics_lines.append("END:VCALENDAR\r\n")
+
+    out_path = Path(out_file)
+    out_path.write_bytes("".join(ics_lines).encode("utf-8"))
+    print(f"\nVygenerovano {count} udalosti ze skutecneho Garmin kalendare"
+          f" -> {out_path.resolve()}")
+    print(f"Rozsah: {events[0]['date']} az {events[-1]['date']}")
+    if weeks_found and max(weeks_found) < total_weeks:
+        print(f"  [WARN] Posledni nalezeny tyden je T{max(weeks_found):02d}"
+              f" z {total_weeks} - zkontroluj Garmin kalendar, plan mozna"
+              " pokracuje za hranici hledani.")
     print("Import: Google Calendar -> + (Dalsi kalendare) -> Importovat")
 
 
@@ -1171,6 +1346,7 @@ Příklady:
   python push_plan.py --start 2026-09-01 --weeks 1       # pilot, ženy
   python push_plan.py --plan zeny --email x@y.cz --password ...
   python push_plan.py --delete --email x@y.cz --password ...  # smazat VTP workouty
+  python push_plan.py --ics-garmin --time 06:30          # ICS ze skutecneho Garmin kalendare
 """)
     p.add_argument("--plan",     default="muzi", choices=["muzi", "zeny"],
                    help="Ktery plan nahrat: muzi (default) nebo zeny")
@@ -1182,6 +1358,10 @@ Příklady:
                    help="Jen výpis JSON, nic nenahrávat")
     p.add_argument("--ics",     nargs="?", const="vtp-plan.ics", metavar="SOUBOR",
                    help="Vygenerovat ICS soubor pro Google Kalendar (default: vtp-plan.ics)")
+    p.add_argument("--ics-garmin", nargs="?", const="vtp-garmin.ics", metavar="SOUBOR",
+                   help="Vygenerovat ICS ze SKUTECNE naplanovanych VTP-T* treninku"
+                        " na Garmin kalendari, od dneska dal (default: vtp-garmin.ics)."
+                        " --start/--weeks se ignoruji, autoritou je Garmin kalendar")
     p.add_argument("--time",    default=None, metavar="HH:MM",
                    help="Cas zacatku treninku v ICS (napr. 06:30); bez toho jsou udalosti celodennni")
     p.add_argument("--delete",   action="store_true",
@@ -1217,6 +1397,16 @@ Příklady:
             start_override=args.start,
             out_file=args.ics,
             start_time=args.time,
+        )
+    elif args.ics_garmin is not None:
+        generate_ics_from_garmin(
+            plan_name=args.plan,
+            out_file=args.ics_garmin,
+            start_time=args.time,
+            email=args.email,
+            password=args.password,
+            no_save=args.no_save,
+            max_hr=args.max_hr,
         )
     elif args.delete:
         delete_vtp_workouts(args.email, args.password, args.no_save)
