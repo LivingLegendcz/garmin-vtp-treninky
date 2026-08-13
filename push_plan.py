@@ -615,18 +615,45 @@ def build_running_workout(day_data, name):
     return _envelope(name, "running", steps, description=desc)
 
 
+TEST_BEH_S = 720            # 12 min behu v kontrolnim testu
+TEST_TEMPO_PASMO = 0.03     # +-3 % tolerance kolem cilového tempa
+
+
 def build_test_workout(day_data, name):
+    """Kontrolni test: 12min beh + leh-sedy + kliky.
+
+    `cil_beh_m` (nepovinne) = na jakou vzdalenost rozvrhnout 12min beh. Prepocte
+    se na tempo a nasadi jako cil kroku, takze hodinky ukazuji cilove tempo a
+    hlasi vypadnuti z pasma. Bez nej krok zadny cil nema (jako driv) a bezec
+    jede na pocit - coz vede k prilis rychlemu zacatku a propadu ve druhe pulce.
+
+    POZOR: `cil_beh_m` je zamerne oddelene od `minima.beh_12min_m`. Minima jsou
+    oficialni armadni pozadavek, cilove tempo je realisticke rozvrzeni pro dany
+    trenink - muze byt (a typicky je) nizsi.
+    """
     minima  = day_data.get("minima", {})
     beh_m   = minima.get("beh_12min_m", 2500)
     lehsedy = minima.get("lehsedy_1min", "?")
     kliky   = minima.get("kliky_30s", "?")
+
+    cil_m = day_data.get("cil_beh_m")
+    tgt, v1, v2, tempo_txt = "none", None, None, ""
+    if cil_m:
+        mps = cil_m / float(TEST_BEH_S)
+        tgt = "pace"
+        v1  = round(mps * (1 - TEST_TEMPO_PASMO), 4)
+        v2  = round(mps * (1 + TEST_TEMPO_PASMO), 4)
+        s_per_km = TEST_BEH_S / float(cil_m) * 1000
+        tempo_txt = f" | drz tempo {int(s_per_km // 60)}:{int(s_per_km % 60):02d}/km na {cil_m} m"
+
     note = (
         f"12min beh - cil min. {beh_m} m | "
         f"max leh-sedy/min (min. {lehsedy}) | max kliky/30s (min. {kliky})"
+        f"{tempo_txt}"
     )
     steps = [
         _step("warmup",   "time", 600, desc="Rozklusani"),
-        _step("interval", "time", 720, desc=note),
+        _step("interval", "time", TEST_BEH_S, tgt, v1, v2, note),
         _step("cooldown", "time", 300, desc="Vyklus + protazeni"),
     ]
     return _envelope(name, "running", _renumber(steps),

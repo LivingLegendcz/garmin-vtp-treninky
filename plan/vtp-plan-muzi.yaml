@@ -328,6 +328,8 @@ tydny:
       ne:
         typ: kontrolni_test
         minima: { beh_12min_m: 2800, lehsedy_1min: 43, kliky_30s: 26 }
+        # realisticke rozvrzeni 12min behu (5:00/km) - viz cil_beh_m v push_plan.py
+        cil_beh_m: 2400
 
   - tyden: 9
     dny:
@@ -415,6 +417,8 @@ tydny:
       ne:
         typ: kontrolni_test
         minima: { beh_12min_m: 2900, lehsedy_1min: 48, kliky_30s: 29 }
+        # realisticke rozvrzeni 12min behu (4:54/km)
+        cil_beh_m: 2450
 
   - tyden: 11
     dny:
@@ -487,3 +491,5 @@ tydny:
       ne:
         typ: kontrolni_test
         minima: { beh_12min_m: 3000, lehsedy_1min: 52, kliky_30s: 32 }
+        # realisticke rozvrzeni 12min behu (4:48/km)
+        cil_beh_m: 2500
