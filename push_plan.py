@@ -582,14 +582,23 @@ def _run_steps(kroky):
         elif krok == "opakovat":
             pocet      = k.get("pocet", 1)
             sub_steps  = _run_steps(k.get("obsah", []))
-            out.append(_repeat_group(pocet, sub_steps))
+            # pokud poslední krok opakování je pauza/klus, poslední opakování ji
+            # nedostane - nic dalšího uvnitř opakování už nenásleduje
+            if pocet > 1 and sub_steps and sub_steps[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
+                out.append(_repeat_group(pocet - 1, [dict(s) for s in sub_steps]))
+                out.extend(dict(s) for s in sub_steps[:-1])
+            else:
+                out.append(_repeat_group(pocet, sub_steps))
 
         elif krok == "pyramida":
             cil_str = f" ({cil}){tgt_suffix}" if cil else ""
-            for dist in k.get("useky_m", []):
+            useky = k.get("useky_m", [])
+            for i, dist in enumerate(useky):
                 label = f"{dist}m{cil_str}"
                 out.append(_step("interval", "dist", dist, tgt, v1, v2, label, zone=zone))
-                out.append(_step("rest", "time", dist, desc=f"Pauza {dist}s"))
+                # bez pauzy po poslednim useku - nasleduje uz jen vyklus
+                if i < len(useky) - 1:
+                    out.append(_step("rest", "time", dist, desc=f"Pauza {dist}s"))
 
     return _renumber(out)
 
@@ -632,7 +641,7 @@ def _cvik_steps(c, pauza_faktor=1.0):
     serie   = _int_range(c.get("serie", 1))
     steps   = []
 
-    for _ in range(serie):
+    for i in range(serie):
         if "cas_s" in c:
             steps.append(_step("interval", "time", c["cas_s"],
                                ex_cat=cat, ex_name=ex, desc=desc))
@@ -649,7 +658,8 @@ def _cvik_steps(c, pauza_faktor=1.0):
             steps.append(_step("interval", "lap",
                                ex_cat=cat, ex_name=ex, desc=rezim))
 
-        if pauza_s and pauza_s > 0:
+        # bez pauzy po posledni serii - neni uz co odpocivat pred dalsim cvikem
+        if pauza_s and pauza_s > 0 and i < serie - 1:
             steps.append(_step("rest", "time", pauza_s, desc="Pauza"))
 
     return steps
@@ -670,9 +680,11 @@ def build_strength_workout(day_data, name, pauza_faktor=1.0):
             round_steps.extend(_cvik_steps(c, pauza_faktor))
 
     if kola > 1 and round_steps:
-        round_steps.append(_step("rest", "time", pauza_kola,
-                                 desc=f"Pauza mezi koly ({pauza_kola}s)"))
-        top_steps = [_repeat_group(kola, round_steps)]
+        # posledni kolo bez navazujici pauzy - trenink pak rovnou konci
+        grouped = [dict(s) for s in round_steps]
+        grouped.append(_step("rest", "time", pauza_kola,
+                             desc=f"Pauza mezi koly ({pauza_kola}s)"))
+        top_steps = [_repeat_group(kola - 1, grouped)] + round_steps
     else:
         top_steps = round_steps
 
@@ -715,8 +727,10 @@ def build_combo_workout(day_data, name, pauza_faktor=1.0):
             round_steps.append(_step("interval", "lap", desc=b.get("popis", "")))
 
     if kola > 1 and round_steps:
-        round_steps.append(_step("rest", "time", pauza_kola, desc="Pauza mezi koly"))
-        top_steps = [_repeat_group(kola, round_steps)]
+        # posledni kolo bez navazujici pauzy - trenink pak rovnou konci
+        grouped = [dict(s) for s in round_steps]
+        grouped.append(_step("rest", "time", pauza_kola, desc="Pauza mezi koly"))
+        top_steps = [_repeat_group(kola - 1, grouped)] + round_steps
     else:
         top_steps = round_steps
 
