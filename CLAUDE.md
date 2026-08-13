@@ -91,6 +91,16 @@ python push_plan.py --fetch-cviky                       # needs login → cviky-
 python push_plan.py --validate-cviky cviky-garmin.json  # offline diff, prints OK/ERR per exercise
 ```
 
+**Download real performance + fitness data for offline analysis (needs login):**
+```bash
+python push_plan.py --fetch-vykon --plan muzi --start 2026-06-01 --pauza-faktor 0.5
+```
+Writes `vykon-garmin.json` (gitignored — personal health data). Without `--start` it
+takes 140 days back. Pass the same `--pauza-faktor` used when uploading, so the planned
+rest steps it records match what was actually on the watch. Re-running is cheap: details
+of activities already in the file are recycled, so only new activities are fetched — this
+also lets a run interrupted by a rate limit be finished by simply running it again.
+
 **Validate YAML plans (mirrors GitHub Actions CI):**
 ```bash
 python -c "
@@ -113,12 +123,12 @@ Everything lives in a single script `push_plan.py` (~1430 lines). There are no m
 | Function | Role |
 |---|---|
 | `push_plan()` | Entry point: loads YAML, builds workouts, uploads, schedules |
-| `_connect()` | OAuth login via `garth`; reads cached token from `~/.garmin_tokens` |
+| `_connect()` | OAuth login; reads cached token from `~/.garmin_tokens`. MFA goes through the library's `prompt_mfa` callback — **not** the `login()` return value, which never signals MFA. Exits with a readable message instead of a traceback when the token is stale |
 | `day_to_workout()` | Dispatcher: routes a YAML day to the correct builder by `typ` field |
 | `build_running_workout()` | Builds running workouts with structured steps |
 | `build_strength_workout()` | Builds strength workouts with rep/timed sets |
 | `build_combo_workout()` | Builds cardio workouts mixing exercises and running segments |
-| `build_test_workout()` | Builds the control test (12-min run + sit-ups + push-ups) |
+| `build_test_workout()` | Builds the control test (12-min run + sit-ups + push-ups); optional `cil_beh_m` puts a pace target on the 12-min step |
 | `_run_steps()` | Recursively converts YAML `kroky` into Garmin step dicts (handles `opakovat` repeat groups) |
 | `_cvik_steps()` | Converts a single exercise definition into Garmin step dicts using `EXERCISE_MAP`; scales `pauza_s` by `pauza_faktor` |
 | `delete_vtp_workouts()` | Fetches all workouts, deletes those matching `VTP-T*` |
@@ -129,9 +139,10 @@ Everything lives in a single script `push_plan.py` (~1430 lines). There are no m
 
 | Function | Role |
 |---|---|
-| `_parse_target()` | Parses a YAML `cil` string into a target kind + numeric range (`% SFmax`, `% rychlosti`, `% úsilí`) |
+| `_parse_target()` | Parses a YAML `cil` string into a target kind + numeric range. Takes an optional `vzdalenost_m`: `"X:YY/km"` is a pace per km, but `"do X:YY"` / `"NN s/kolo"` (no `/km`) is the **total time for that segment**, so the pace is `vzdalenost_m / total_s`. `% rychlosti` / `% úsilí` yield no target |
 | `_zone_for_pct()` | Maps a `% SFmax` value onto Garmin zone number 1–5 |
 | `_resolve_hr_pct()` | Converts a percent range to `(bpm_low, bpm_high, zone)`; warns once if no HR source exists |
+| `_resolve_hr_abs()` | Same for an absolute bpm target (`"průměrná SF 120 tep/min"`) — finds the zone the bpm falls into |
 | `_get_hr_zones()` | Reads real zone floors + max HR from `/biometric-service/heartRateZones` |
 | `_load_hr_state()` | Populates module globals `HR_ZONES` / `MAX_HR`; `--max-hr` overrides Connect values |
 | `_apply_max_hr()` | Sets `MAX_HR` alone — used by `--ics`, which never authenticates |
@@ -142,6 +153,16 @@ Everything lives in a single script `push_plan.py` (~1430 lines). There are no m
 |---|---|
 | `fetch_garmin_cviky()` | Downloads categories + exercise names from `/workout-service/workout/exercise/*` into JSON |
 | `validate_exercise_map()` | Diffs `EXERCISE_MAP` against that JSON offline; suggests the closest key per failed lookup |
+
+**Performance data tooling** (`--fetch-vykon`):
+
+| Function | Role |
+|---|---|
+| `fetch_garmin_vykon()` | Orchestrator: activities + laps/sets + weight + fitness metrics → one JSON. Attaches each activity's matched plan day and its planned steps (via `day_to_workout`), so planned vs actual is directly comparable — both paces are in **m/s** |
+| `_vtp_name_in()` | Extracts the `VTP-T08-CT-BEH` code from anywhere in an activity name. **Required**: Garmin prefixes run activities with the location (`Praha - VTP-T08-CT-BEH`), so exact-name matching silently misses every run |
+| `_api_try()` | Wraps one Garmin call so a single failure prints `[WARN]` and continues instead of killing the collection |
+| `_trim_laps()` / `_trim_sets()` / `_trim_plan_steps()` | Field allowlists that keep the JSON small enough for an LLM to read in one pass |
+| `_pick()` / `_num()` | Tolerate Garmin's inconsistent field names; round numbers down to keep size sane |
 
 ### YAML plan schema
 
@@ -164,7 +185,19 @@ tydny:
         kroky:             # used by beh/kombinace
           - typ: rozklusani
             cas_min: 10
+      ne:
+        typ: kontrolni_test
+        minima: { beh_12min_m: 2800, lehsedy_1min: 43, kliky_30s: 26 }
+        cil_beh_m: 2450    # optional: distance to pace the 12-min run for
 ```
+
+`minima` is the requirement to report; `cil_beh_m` is what the **watch** paces at, and the
+two are deliberately separate. `minima` in these plans is their source's own progression
+(2200→3000), not the official AZVP table — the real test is a points total capped by age
+(see `https://azvp.cz/vyberove-rizeni/`, point 5), where the 12-min run scores
+2800 m = 0 pts, 2600 = 1, 2400 = 2, 2200 = 3, and 1800 m is the floor that cannot be
+missed. Fewer points is better. Because scoring is bracketed, set `cil_beh_m` slightly
+**above** a bracket boundary (2450, not 2400) — landing at 2395 m costs a whole point.
 
 The exercise key is `cvik` (not `nazev`) and must exist in `EXERCISE_MAP`. Use `opakovani` for rep-based sets or `cas_s` / `cas_min` for timed ones; `popis` overrides the auto-generated Czech label.
 
@@ -196,3 +229,6 @@ First login requires `--email` + `--password`; the token is saved to `~/.garmin_
 - **HR targets need a source.** YAML expresses intensity as `% SFmax`. Priority: `--max-hr` > HR zones fetched from Connect after login > nothing (targets are dropped with a single `[WARN]`). `--dry-run` and `--ics` never authenticate, so pass `--max-hr` there or the output has no HR targets.
 - `--pauza-faktor` only affects `silovy` and `kombinace` days (both `pauza_s` and `pauza_mezi_koly_s`); running and test workouts are untouched. Scaled rests are clamped to a 1 s minimum — Garmin rejects a REST step with a zero end condition.
 - `--validate-cviky` runs offline but needs a JSON produced by `--fetch-cviky`; an empty `cviky-garmin.json` means the fetch never ran successfully.
+- **No trailing rest.** The last set of an exercise, the last round of a `kola > 1` workout, the last segment of a `pyramida` and the last repetition of an `opakovat` block all end without a following rest step — a workout must not finish on a pause. Rounds/repeats are built as `(N-1 in the repeat group) + (1 unrolled without the rest)`.
+- **`do X:YY` is a segment total, not a pace per km** (only `X:YY/km` is a per-km pace). For a 500 m rep, `max do 1:50` means covering it in 1:50, i.e. 3:40/km — historically this was read as 3:40/km regardless of distance, which produced absurd targets on any segment that wasn't 1000 m.
+- `--fetch-vykon` writes personal health data (weight, HR, HRV) to `vykon-garmin.json`, which is gitignored — keep it that way, and don't paste its contents into shared output.
