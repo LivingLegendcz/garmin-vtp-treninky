@@ -22,7 +22,7 @@ plan/vtp-plan-muzi.yaml  →  push_plan.py  →  Garmin Connect (workouts + kale
 ## Instalace
 
 ```bash
-pip install garminconnect pyyaml
+pip install -r requirements.txt      # garminconnect, garth, pyyaml
 ```
 
 ## Použití
@@ -67,8 +67,63 @@ python push_plan.py --plan muzi --email tvuj@email.cz --password TveHeslo
 | `--time HH:MM` | Čas začátku tréninku v ICS (bez toho jsou události celodenní) |
 | `--delete` | Smazat všechny `VTP-T*` workouty z Garmin Connect |
 | `--email` / `--password` | Přihlašovací údaje Garmin Connect |
+| `--no-save` | Neukládat Garmin token na disk (jednorázové spuštění) |
+| `--od-tydne N` | Začít nahrávat až od týdne N (přeskočí týdny 1..N-1) |
+| `--pauza-faktor FLOAT` | Násobitel všech pauz (výchozí `1.0`) |
+| `--max-hr N` | Ruční max. SF pro výpočet HR cílů (override / fallback pro `--dry-run`) |
+| `--fetch-cviky [soubor]` | Stáhnout katalog cviků z Garminu do JSON (výchozí: `cviky-garmin.json`) |
+| `--validate-cviky soubor` | Ověřit `EXERCISE_MAP` proti staženému JSON |
 
 Skript je **idempotentní** — spustíš-li ho znovu, stávající workouty se smažou a nahrají znovu.
+
+### Pokročilé přepínače
+
+#### `--od-tydne N` — nahrát jen zbytek plánu
+
+Když už máš prvních pár týdnů na hodinkách a nechceš je přepisovat, nahraj jen zbytek:
+
+```bash
+python push_plan.py --plan muzi --start 2026-06-16 --od-tydne 5   # týdny 5–12
+```
+
+Datum se pořád počítá od `--start` (pondělí 1. týdne), takže dny sedí správně. Kombinovatelné s `--weeks`.
+
+#### `--pauza-faktor FLOAT` — zkrátit nebo prodloužit pauzy
+
+Vynásobí **všechny** pauzy v silových a kombinovaných trénincích — jak `pauza_s` u jednotlivých cviků, tak `pauza_mezi_koly_s`. Běhy a kontrolní testy zůstávají beze změny.
+
+```bash
+python push_plan.py --plan muzi --pauza-faktor 0.5   # poloviční pauzy
+python push_plan.py --plan muzi --pauza-faktor 1.5   # delší pauzy
+```
+
+Výchozí je `1.0` (pauzy přesně dle YAML). Pauza se nikdy nezkrátí pod 1 sekundu — Garmin odmítá REST krok s nulovou délkou.
+
+#### `--max-hr N` — HR cíle v tepech místo procent
+
+Plány zadávají intenzitu jako `% SFmax` (např. `70-80 % SFmax`). Skript to překládá na konkrétní bpm a Garmin zónu. Priorita zdrojů:
+
+1. **`--max-hr N`** — ruční hodnota, přebije všechno ostatní
+2. **HR zóny z Garmin Connectu** — načtou se automaticky po přihlášení (`/biometric-service/heartRateZones`); použijí se skutečné hranice zón
+3. **Nic** — HR cíle se vynechají a skript jednou vypíše varování
+
+Protože `--dry-run` a `--ics` se do Garminu nepřihlašují, bez `--max-hr` tam HR cíle chybí:
+
+```bash
+python push_plan.py --plan muzi --dry-run --max-hr 190
+python push_plan.py --plan muzi --start 2026-06-16 --ics --max-hr 190
+```
+
+#### `--fetch-cviky` / `--validate-cviky` — ověření mapování cviků
+
+`EXERCISE_MAP` v `push_plan.py` mapuje ~40 českých názvů cviků na Garmin klíče. Garmin katalog se občas mění; těmito dvěma příkazy si ověříš, že mapování pořád platí:
+
+```bash
+python push_plan.py --fetch-cviky                       # stáhne katalog → cviky-garmin.json
+python push_plan.py --validate-cviky cviky-garmin.json  # porovná s EXERCISE_MAP
+```
+
+`--fetch-cviky` vyžaduje přihlášení (stahuje z `/workout-service/workout/exercise/*`), `--validate-cviky` běží offline nad staženým souborem. Validace vypíše `OK` / `ERR` pro každý cvik a u chyb navrhne nejbližší kandidáta z dané kategorie. Referenční tabulka je v `docs/garmin-mapovani-cviku.md`.
 
 ## Export do Google Kalendáře
 
@@ -118,6 +173,7 @@ Autoritou pro data je Garmin kalendář — `--start` a `--weeks` se ignorují. 
 | `plan/vtp-plan-zeny.yaml` | Kompletní 12týdenní plán (ženy) |
 | `docs/garmin-mapovani-cviku.md` | Mapování českých cviků na Garmin exercise keys |
 | `docs/implementacni-plan.md` | Technické poznámky k implementaci |
+| `cviky-garmin.json` | Katalog cviků stažený z Garminu (výstup `--fetch-cviky`) |
 
 ## Bezpečnost
 
