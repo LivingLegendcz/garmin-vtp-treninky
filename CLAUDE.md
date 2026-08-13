@@ -6,6 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Python CLI tool that converts YAML-defined VTP (Czech Annual Physical Fitness Test) 12-week training plans into structured Garmin Connect workouts and schedules them on a Garmin smartwatch. Optionally exports the plan as an `.ics` file for Google Calendar.
 
+## Environment — run this from Windows, not WSL
+
+**Anything that talks to Garmin must be run by the user from a Windows terminal.** The repo lives on a OneDrive path reachable from both Windows and WSL, but only the Windows Python is set up:
+
+- **WSL is not provisioned and deliberately stays that way.** Its `python3` has `pyyaml` but not `garminconnect` / `garth`, and it is `EXTERNALLY-MANAGED`, so `pip install` needs a venv. Don't set one up unless asked.
+- **The Garmin token lives in the Windows home directory.** `TOKEN_DIR = Path.home() / ".garmin_tokens"` (`push_plan.py:40`) resolves to `C:\Users\<user>\.garmin_tokens\garmin_tokens.json` — WSL's `$HOME` is a different place and has no token, so a WSL run would demand a fresh login.
+
+Practical split:
+
+| Works anywhere (incl. WSL / agents) | Windows only — ask the user to run it |
+|---|---|
+| YAML validation, reading code | `--fetch-cviky`, `--ics-garmin`, `--delete` |
+| `--validate-cviky` (offline, needs the JSON) | any upload run (`push_plan()`) |
+| — | `--dry-run` and `--ics` (no login, but still need the libs) |
+
+So don't try to verify a change by running the script — hand the user the exact command and ask for the output.
+
 ## Commands
 
 **Install dependencies:**
