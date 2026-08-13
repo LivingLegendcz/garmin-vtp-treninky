@@ -977,6 +977,17 @@ def validate_exercise_map(garmin_json_path):
 
 
 # ── Stažení reálného výkonu z Garminu ──────────────────────────────────────────
+# Garmin k nazvu aktivity casto predradi lokalitu ("Praha - VTP-T04-UT-BEH"),
+# takze presna shoda nazvu workoutu nefunguje - VTP kod hledame kdekoli v textu.
+_VTP_RE = re.compile(r"VTP-T\d{2}-[A-Z]{2}-[A-Z]+")
+
+
+def _vtp_name_in(text):
+    """Vytáhne z názvu aktivity VTP kód workoutu, nebo None."""
+    m = _VTP_RE.search(str(text or ""))
+    return m.group(0) if m else None
+
+
 def _pick(obj, *keys, default=None):
     """Vrátí první neprázdný klíč z dictu. Garmin JSON má nekonzistentní názvy
     polí mezi endpointy, takže zkoušíme víc variant."""
@@ -1237,12 +1248,14 @@ def fetch_garmin_vykon(api, output_file="vykon-garmin.json", plan_name="muzi",
         act_id = a.get("activityId")
         name   = str(a.get("activityName") or "").strip()
         typ_key = ((a.get("activityType") or {}).get("typeKey") or "").lower()
-        matched = day_index.get(name)
+        vtp     = _vtp_name_in(name)
+        matched = day_index.get(vtp) if vtp else None
 
         rec = {
             "activity_id": act_id,
             "datum":       (a.get("startTimeLocal") or "")[:10],
             "nazev":       name,
+            "vtp_nazev":   vtp,
             "typ_garmin":  typ_key,
             "souhrn": {
                 "vzdalenost_m": _num(a.get("distance")),
@@ -1307,7 +1320,7 @@ def fetch_garmin_vykon(api, output_file="vykon-garmin.json", plan_name="muzi",
         result["treninky"].append(rec)
 
     # ── Vynechané tréninky: naplánováno v kalendáři, ale nic se neodběhlo ─────
-    hotovo = {t["nazev"] for t in result["treninky"] if t.get("nazev")}
+    hotovo = {t["vtp_nazev"] for t in result["treninky"] if t.get("vtp_nazev")}
     result["nesplneno"] = [
         ev for ev in result["naplanovano"]
         if ev["nazev"] not in hotovo and ev["datum"] < today.isoformat()
