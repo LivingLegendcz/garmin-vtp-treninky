@@ -187,16 +187,21 @@ def _int_range(val, default=1):
     return int(val)
 
 
-def _parse_target(cil):
+def _parse_target(cil, vzdalenost_m=None):
     """Parsuje cíl -> (tgt_key, val1, val2).
 
     Vrací jeden z:
-      ("none",   None, None)            - bez cíle
-      ("hr_pct", lo,   hi)              - PROCENTNÍ rozsah % max. SF (NE bpm!)
-      ("pace",   mps_lo, mps_hi)        - tempo v m/s
+      ("none",    None, None)           - bez cíle
+      ("hr_abs",  bpm,  bpm)            - ABSOLUTNÍ tep (bpm)
+      ("hr_pct",  lo,   hi)             - PROCENTNÍ rozsah % max. SF (NE bpm!)
+      ("pace",    mps_lo, mps_hi)       - tempo v m/s
 
     Pozn.: '% rychlosti' a '% úsilí' jsou rychlost/úsilí (sprint), NE srdeční tep
     -> vracíme "none" (popisek zůstane v labelu).
+
+    Tempo: "X:YY/km" (explicitní /km) je tempo přímo na km. "do X:YY", "max do X:YY"
+    nebo "NN s/kolo" (bez /km) je CELKOVÝ ČAS na daný úsek -> tempo se dopočítá jako
+    vzdalenost_m / celkový_čas (proto je potřeba znát vzdálenost úseku).
     """
     if not cil:
         return "none", None, None
@@ -206,6 +211,12 @@ def _parse_target(cil):
     # Sprint: "90 % max rychlosti" / "90 % max úsilí" -> rychlost/úsilí, NE tep
     if "rychlost" in low or "úsil" in low or "usil" in low:
         return "none", None, None
+
+    # Absolutní tep: "120 tep/min", "průměrná SF 120 tep/min"
+    m = re.search(r"(\d+)\s*tep", low)
+    if m:
+        bpm = int(m.group(1))
+        return "hr_abs", bpm, bpm
 
     # Rozsah %: "60-70 % SFmax" -> procentní rozsah
     m = re.search(r"(\d+)\s*[-]\s*(\d+)\s*%", s)
@@ -218,11 +229,23 @@ def _parse_target(cil):
         pct = int(m.group(1))
         return "hr_pct", max(50, pct - 5), pct + 5
 
-    # Tempo "4:30/km" nebo "do 3:50"
-    m = re.search(r"(\d+):(\d+)(?:/km)?", s)
-    if m:
-        pace_s_per_km = int(m.group(1)) * 60 + int(m.group(2))
-        mps = 1000.0 / pace_s_per_km
+    # Tempo přímo na km: "tempo 4:20-4:30/km" (jen první hodnota + ±5 % pásmo)
+    if "/km" in low:
+        m = re.search(r"(\d+):(\d+)", s)
+        if m:
+            pace_s_per_km = int(m.group(1)) * 60 + int(m.group(2))
+            mps = 1000.0 / pace_s_per_km
+            return "pace", round(mps * 0.95, 4), round(mps * 1.05, 4)
+        return "none", None, None
+
+    # Celkový čas na úsek: "max do 1:50", "max, do 7:45", "tempo 90 s/kolo"
+    m = re.search(r"(\d+):(\d+)", s)
+    total_s = int(m.group(1)) * 60 + int(m.group(2)) if m else None
+    if total_s is None:
+        m = re.search(r"(\d+)\s*s\b", low)
+        total_s = int(m.group(1)) if m else None
+    if total_s and vzdalenost_m:
+        mps = vzdalenost_m / total_s
         return "pace", round(mps * 0.95, 4), round(mps * 1.05, 4)
 
     return "none", None, None
@@ -283,6 +306,34 @@ def _resolve_hr_pct(lo, hi):
     return None, None, None
 
 
+def _resolve_hr_abs(bpm):
+    """Převede absolutní tep (bpm, např. 'průměrná SF 120 tep/min') na
+    (bpm_low, bpm_high, zone_number) — najde zónu z reálných hranic (HR_ZONES),
+    do níž bpm spadá, a vrátí její hranice. Stejná priorita zdroje jako
+    _resolve_hr_pct (reálné zóny z Connectu > jen max. SF > nic)."""
+    global _HR_WARNED
+    if HR_ZONES and HR_ZONES.get("floors"):
+        floors = HR_ZONES["floors"]
+        max_hr = HR_ZONES.get("max_hr")
+        zone = 1
+        for i, floor in enumerate(floors, start=1):
+            if bpm >= floor:
+                zone = i
+        bpm_low = floors[zone - 1]
+        bpm_high = floors[zone] if zone < 5 else (max_hr if max_hr else floors[4])
+        return int(bpm_low), int(bpm_high), zone
+
+    if MAX_HR:
+        zone = _zone_for_pct(bpm / MAX_HR * 100.0)
+        return bpm - 5, bpm + 5, zone
+
+    if not _HR_WARNED:
+        print("  [WARN] Neznámá max. SF ani HR zóny - HR cíle budou vynechány."
+              " Použij --max-hr N nebo se přihlas (zóny z Garmin Connect).")
+        _HR_WARNED = True
+    return None, None, None
+
+
 def _cvik_label(c):
     """Sestaví popisek cviku: 'Kliky 3x10' / 'Plank 30s' / vlastní popis."""
     if c.get("popis"):
@@ -327,22 +378,28 @@ def _build_run_desc(day_data):
                     inner.append(f"chuze {sub.get('cas_s','?')}s")
                 elif sk == "beh":
                     t = sub.get("cas_s") or (str(sub.get("cas_min","?"))+"min")
-                    inner.append(f"beh {t}s" if sub.get("cas_s") else f"beh {t}")
+                    sub_cil = sub.get("cil")
+                    sub_txt = (" " + sub_cil + _hr_label_suffix(sub_cil)) if sub_cil else ""
+                    inner.append((f"beh {t}s" if sub.get("cas_s") else f"beh {t}") + sub_txt)
                 elif sk == "usek":
-                    inner.append(f"{sub.get('vzdalenost_m','?')}m")
+                    sub_cil = sub.get("cil")
+                    sub_txt = (" " + sub_cil + _hr_label_suffix(sub_cil, sub.get("vzdalenost_m"))) if sub_cil else ""
+                    inner.append(f"{sub.get('vzdalenost_m','?')}m{sub_txt}")
                 elif sk == "klus":
                     inner.append(f"klus {sub.get('cas_s', sub.get('cas_min','?'))}s")
             parts.append(f"{pocet}x ({' + '.join(inner)})")
         elif kr in ("beh", "usek"):
             cil = k.get("cil")
-            cil_txt = (" " + cil + _hr_label_suffix(cil)) if cil else ""
+            cil_txt = (" " + cil + _hr_label_suffix(cil, k.get("vzdalenost_m"))) if cil else ""
             if "vzdalenost_m" in k:
                 parts.append(f"Beh {k['vzdalenost_m']}m{cil_txt}")
             elif "cas_min" in k:
                 parts.append(f"Beh {k['cas_min']}min{cil_txt}")
         elif kr == "pyramida":
             useky = k.get("useky_m", [])
-            parts.append(f"Pyramida: {'-'.join(str(u) for u in useky)}m")
+            cil = k.get("cil")
+            cil_txt = (" " + cil + _hr_label_suffix(cil)) if cil else ""
+            parts.append(f"Pyramida: {'-'.join(str(u) for u in useky)}m{cil_txt}")
     desc = (podtyp + ": " if podtyp else "") + ", ".join(parts)
     if day_data.get("popis"):
         desc = day_data["popis"] + (" | " + desc if desc else "")
@@ -420,16 +477,24 @@ def _envelope(name, sport_key, steps, description=None):
 
 
 # ── Running builder ────────────────────────────────────────────────────────────
-def _resolve_step_target(cil):
+def _resolve_step_target(cil, vzdalenost_m=None):
     """Z YAML cíle vrátí (tgt_key, v1, v2, zone, label_suffix) pro běžecký krok.
 
+    - hr_abs  -> absolutní bpm převede na zónu (dle reálných zón / max. SF).
     - hr_pct  -> převede na bpm + zónu (dle reálných zón / max. SF).
                  Pokud se nepodaří, vrátí no.target, ale popisek % zachová.
-    - pace    -> beze změny.
+    - pace    -> beze změny (pro "celkový čas na úsek" potřebuje vzdalenost_m).
     - none    -> bez cíle (label_suffix prázdný).
     label_suffix je text k doplnění do popisku kroku, např. " [Z2, 114-133]".
     """
-    tgt, a, b = _parse_target(cil)
+    tgt, a, b = _parse_target(cil, vzdalenost_m)
+
+    if tgt == "hr_abs":
+        bpm_low, bpm_high, zone = _resolve_hr_abs(a)
+        if bpm_low is not None:
+            suffix = f" [Z{zone}, {bpm_low}-{bpm_high}]"
+            return "hr", bpm_low, bpm_high, zone, suffix
+        return "none", None, None, None, ""
 
     if tgt == "hr_pct":
         bpm_low, bpm_high, zone = _resolve_hr_pct(a, b)
@@ -445,10 +510,10 @@ def _resolve_step_target(cil):
     return "none", None, None, None, ""
 
 
-def _hr_label_suffix(cil):
+def _hr_label_suffix(cil, vzdalenost_m=None):
     """Vrátí popisek typu ' [Z2, 114-133]' pro HR cíl, jinak prázdný řetězec.
     Používá se v ICS / popisech (ne ve struktuře kroku)."""
-    _, _, _, _, suffix = _resolve_step_target(cil)
+    _, _, _, _, suffix = _resolve_step_target(cil, vzdalenost_m)
     return suffix
 
 
@@ -459,7 +524,11 @@ def _run_steps(kroky):
         krok = k.get("krok", "")
         cil  = k.get("cil")
         desc = k.get("popis") or k.get("poznamka")
-        tgt, v1, v2, zone, tgt_suffix = _resolve_step_target(cil)
+        vzd_m = k.get("vzdalenost_m")
+        if vzd_m is None and "vzdalenost_km" in k:
+            raw_km = k["vzdalenost_km"]
+            vzd_m = (_int_range(raw_km) if isinstance(raw_km, str) and "-" in raw_km else float(raw_km)) * 1000
+        tgt, v1, v2, zone, tgt_suffix = _resolve_step_target(cil, vzd_m)
 
         if krok == "rozklusani":
             secs = _int_range(k.get("cas_min", 10)) * 60
@@ -516,8 +585,10 @@ def _run_steps(kroky):
             out.append(_repeat_group(pocet, sub_steps))
 
         elif krok == "pyramida":
+            cil_str = f" ({cil}){tgt_suffix}" if cil else ""
             for dist in k.get("useky_m", []):
-                out.append(_step("interval", "dist", dist, desc=f"{dist}m"))
+                label = f"{dist}m{cil_str}"
+                out.append(_step("interval", "dist", dist, tgt, v1, v2, label, zone=zone))
                 out.append(_step("rest", "time", dist, desc=f"Pauza {dist}s"))
 
     return _renumber(out)
@@ -627,12 +698,19 @@ def build_combo_workout(day_data, name, pauza_faktor=1.0):
             round_steps.extend(_cvik_steps(b, pauza_faktor))
         elif b.get("krok") == "beh":
             raw = b.get("vzdalenost_km")
+            vzd_m = None
             if raw:
                 km = _int_range(raw) if isinstance(raw, str) and "-" in raw else float(raw)
-                round_steps.append(_step("interval", "dist", int(km * 1000),
-                                         desc=b.get("popis", "Beh")))
+                vzd_m = km * 1000
+            cil = b.get("cil")
+            tgt, v1, v2, zone, tgt_suffix = _resolve_step_target(cil, vzd_m)
+            label = (b.get("popis", "Beh") + tgt_suffix) if cil else b.get("popis", "Beh")
+            if vzd_m:
+                round_steps.append(_step("interval", "dist", int(vzd_m),
+                                         tgt=tgt, v1=v1, v2=v2, desc=label, zone=zone))
             else:
-                round_steps.append(_step("interval", "lap", desc=b.get("popis", "Beh")))
+                round_steps.append(_step("interval", "lap",
+                                         tgt=tgt, v1=v1, v2=v2, desc=label, zone=zone))
         else:
             round_steps.append(_step("interval", "lap", desc=b.get("popis", "")))
 
