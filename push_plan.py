@@ -22,6 +22,7 @@ import io
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 # Zajistíme UTF-8 výstup na Windows
@@ -759,18 +760,30 @@ def day_to_workout(day_data, name, pauza_faktor=1.0):
 
 # ── Garmin Connect I/O ─────────────────────────────────────────────────────────
 def _connect(email=None, password=None, no_save=False):
-    """Připojí se ke Garmin Connect. Token se uloží do TOKEN_DIR (pokud není --no-save)."""
-    api = Garmin(email or None, password or None)
+    """Připojí se ke Garmin Connect. Token se uloží do TOKEN_DIR (pokud není --no-save).
 
-    if no_save:
-        result = api.login()
-    else:
-        TOKEN_DIR.mkdir(parents=True, exist_ok=True)
-        result = api.login(tokenstore=str(TOKEN_DIR))
+    MFA se řeší přes `prompt_mfa` callback knihovny - ta si o kód řekne sama,
+    když ho Garmin vyžádá. (Dřív se tu testovala návratová hodnota `login()`,
+    ale ta MFA nikdy nesignalizuje: bez `prompt_mfa`/`return_on_mfa` knihovna
+    rovnou vyhodí GarminConnectAuthenticationError.)
+    """
+    api = Garmin(
+        email or None,
+        password or None,
+        prompt_mfa=lambda: input("Zadej MFA kód z Garmin / e-mailu: ").strip(),
+    )
 
-    if result and result[0]:  # MFA needed
-        mfa_code = input("Zadej MFA kód z Garmin / e-mailu: ").strip()
-        api.resume_login(mfa_code)
+    try:
+        if no_save:
+            api.login()
+        else:
+            TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+            api.login(tokenstore=str(TOKEN_DIR))
+    except Exception as e:
+        print(f"\nCHYBA prihlaseni do Garmin Connect: {e}")
+        if not (email and password):
+            print("Ulozeny token je asi prosly - spust znovu s --email a --password.")
+        sys.exit(1)
 
     return api
 
@@ -961,6 +974,366 @@ def validate_exercise_map(garmin_json_path):
     print(f"\nVýsledek: {ok} OK, {err} chyb z {ok + err} cviků.")
     if err:
         print("Uprav EXERCISE_MAP v push_plan.py dle výše.")
+
+
+# ── Stažení reálného výkonu z Garminu ──────────────────────────────────────────
+def _pick(obj, *keys, default=None):
+    """Vrátí první neprázdný klíč z dictu. Garmin JSON má nekonzistentní názvy
+    polí mezi endpointy, takže zkoušíme víc variant."""
+    if not isinstance(obj, dict):
+        return default
+    for k in keys:
+        if obj.get(k) is not None:
+            return obj[k]
+    return default
+
+
+def _num(val, digits=1):
+    """Zaokrouhlí číslo (šetří velikost JSONu); nečíslo vrátí beze změny."""
+    if isinstance(val, (int, float)):
+        return round(val, digits)
+    return val
+
+
+def _api_try(label, fn, *args, **kwargs):
+    """Zavolá Garmin API; při chybě vypíše [WARN] a vrátí None.
+
+    Garmin API je neoficiální a jednotlivé endpointy občas chybí data nebo
+    vrátí 4xx (ty knihovna neretryuje) - jeden neúspěch nesmí shodit celý sběr.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        print(f"  [WARN] {label}: {e}")
+        return None
+
+
+def _trim_laps(splits):
+    """Z /activity/{id}/splits ponechá jen pole nutná k posouzení tempa a tepu
+    po jednotlivých úsecích (kvůli velikosti JSONu zahazujeme zbytek)."""
+    if not isinstance(splits, dict):
+        return []
+    raw = splits.get("lapDTOs") or splits.get("splits") or []
+    out = []
+    for i, lap in enumerate(raw, 1):
+        if not isinstance(lap, dict):
+            continue
+        out.append({
+            "i":             i,
+            "vzdalenost_m":  _num(_pick(lap, "distance")),
+            "cas_s":         _num(_pick(lap, "duration", "elapsedDuration")),
+            "tempo_mps":     _num(_pick(lap, "averageSpeed"), 3),
+            "tempo_max_mps": _num(_pick(lap, "maxSpeed"), 3),
+            "hr_avg":        _pick(lap, "averageHR"),
+            "hr_max":        _pick(lap, "maxHR"),
+        })
+    return out
+
+
+def _trim_sets(sets_raw):
+    """Z /activity/{id}/exerciseSets ponechá cvik + opakování/čas per série."""
+    if not isinstance(sets_raw, dict):
+        return []
+    out = []
+    for s in sets_raw.get("exerciseSets") or []:
+        if not isinstance(s, dict):
+            continue
+        exercises = s.get("exercises")
+        ex = exercises[0] if isinstance(exercises, list) and exercises else {}
+        out.append({
+            "typ":       str(s.get("setType") or "").upper(),   # ACTIVE / REST
+            "cvik":      _pick(ex, "name", "category"),
+            "kategorie": _pick(ex, "category"),
+            "opakovani": s.get("repetitionCount"),
+            "cas_s":     _num(s.get("duration")),
+        })
+    return out
+
+
+def _trim_plan_steps(steps):
+    """Z plánovaných Garmin kroků ponechá cíl + délku, rekurzivně i v repeat
+    grupách. Slouží k porovnání 'co bylo naplánováno' vs. 'co se odběhlo'."""
+    out = []
+    for s in steps or []:
+        if not isinstance(s, dict):
+            continue
+        if s.get("type") == "RepeatGroupDTO":
+            out.append({
+                "opakovat": s.get("numberOfIterations"),
+                "kroky":    _trim_plan_steps(s.get("workoutSteps")),
+            })
+            continue
+        out.append({
+            "krok":          (s.get("stepType")   or {}).get("stepTypeKey"),
+            "konec":         (s.get("endCondition") or {}).get("conditionTypeKey"),
+            "konec_hodnota": _num(s.get("endConditionValue")),
+            "cil":           (s.get("targetType") or {}).get("workoutTargetTypeKey"),
+            "cil_od":        _num(s.get("targetValueOne"), 3),
+            "cil_do":        _num(s.get("targetValueTwo"), 3),
+            "zona":          s.get("zoneNumber"),
+            "popis":         s.get("description"),
+        })
+    return out
+
+
+def fetch_garmin_vykon(api, output_file="vykon-garmin.json", plan_name="muzi",
+                       pauza_faktor=1.0, start_override=None, max_hr=None):
+    """Stáhne REÁLNÝ výkon + kondiční data z Garmin Connectu do jednoho JSONu.
+
+    Výstup slouží k offline analýze: ke každé odběhnuté aktivitě se podle názvu
+    (VTP-T08-CT-BEH) dohledá plánovaný den v YAML a k němu se přiloží plánované
+    kroky s dořešenými cíli - tempo je v obou případech v m/s, takže jde
+    plánované a skutečné srovnat přímo.
+
+    pauza_faktor se propisuje do plánovaných kroků, aby pauzy odpovídaly tomu,
+    co uživatel reálně nahrál na hodinky (ne tomu, co je surově v YAML).
+    """
+    plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
+    if not plan_file.exists():
+        print(f"CHYBA: soubor {plan_file} neexistuje.")
+        sys.exit(1)
+    with open(plan_file, encoding="utf-8") as f:
+        plan = yaml.safe_load(f)
+
+    day_index = _index_plan_by_name(plan)
+
+    today = datetime.date.today()
+    if start_override:
+        try:
+            start = datetime.date.fromisoformat(start_override)
+        except ValueError:
+            print(f"CHYBA: --start '{start_override}' neni platne datum (YYYY-MM-DD).")
+            sys.exit(1)
+    else:
+        # bez --start bereme generozni okno dozadu, at pokryjeme cely plan
+        start = today - datetime.timedelta(days=140)
+
+    print(f"Obdobi: {start.isoformat()} .. {today.isoformat()}")
+
+    # HR zóny z Connectu -> plánované % SFmax se dořeší na reálné bpm/zóny
+    _load_hr_state(api, max_hr_override=max_hr)
+
+    result = {
+        "meta": {
+            "stazeno":       today.isoformat(),
+            "obdobi_od":     start.isoformat(),
+            "obdobi_do":     today.isoformat(),
+            "plan":          plan_name,
+            "pauza_faktor":  pauza_faktor,
+            "max_hr":        MAX_HR,
+            "hr_zony":       HR_ZONES,
+        },
+        "profil":     {},
+        "vaha":       [],
+        "kondice":    {},
+        "naplanovano": [],
+        "treninky":   [],
+    }
+
+    # ── Profil, váha ───────────────────────────────────────────────────────────
+    print("Stahuji profil a vahu...")
+    prof = _api_try("profil", api.get_user_profile)
+    if isinstance(prof, dict):
+        result["profil"] = {
+            k: prof.get(k) for k in
+            ("weight", "height", "vo2MaxRunning", "vo2MaxCycling", "lactateThresholdSpeed",
+             "lactateThresholdHeartRate", "restingHeartRate", "gender", "birthDate")
+            if prof.get(k) is not None
+        }
+
+    body = _api_try("vaha", api.get_body_composition, start.isoformat(), today.isoformat())
+    if isinstance(body, dict):
+        result["kondice"]["vaha_prumer"] = body.get("totalAverage")
+        for w in body.get("dateWeightList") or []:
+            if isinstance(w, dict):
+                result["vaha"].append({
+                    "datum":     _pick(w, "calendarDate", "date"),
+                    "vaha_g":    _pick(w, "weight"),
+                    "tuk_pct":   _pick(w, "bodyFat"),
+                })
+
+    # ── Kondiční metriky: týdenní vzorky + rozsahové/aktuální ─────────────────
+    sample_days = []
+    d = start
+    while d <= today:
+        sample_days.append(d)
+        d += datetime.timedelta(days=7)
+    if not sample_days or sample_days[-1] != today:
+        sample_days.append(today)
+
+    print(f"Stahuji kondicni metriky ({len(sample_days)} tydennich vzorku)...")
+    vo2, tstatus, fage, hrv, rhr = [], [], [], [], []
+    for d in sample_days:
+        ds = d.isoformat()
+        m = _api_try(f"vo2max {ds}", api.get_max_metrics, ds)
+        if m:
+            entry = m[0] if isinstance(m, list) and m else m
+            gen = (entry or {}).get("generic") or {}
+            vo2.append({"datum": ds, "vo2max": gen.get("vo2MaxPreciseValue") or gen.get("vo2MaxValue")})
+        ts = _api_try(f"training status {ds}", api.get_training_status, ds)
+        if isinstance(ts, dict):
+            tstatus.append({"datum": ds, "stav": _pick(ts, "trainingStatus", "trainingStatusKey")})
+        fa = _api_try(f"fitness age {ds}", api.get_fitnessage_data, ds)
+        if isinstance(fa, dict):
+            fage.append({"datum": ds, "fitness_age": _pick(fa, "chronologicalAge", "achievableFitnessAge",
+                                                           "fitnessAge")})
+        hv = _api_try(f"hrv {ds}", api.get_hrv_data, ds)
+        if isinstance(hv, dict):
+            summ = hv.get("hrvSummary") or {}
+            hrv.append({"datum": ds, "hrv": summ.get("weeklyAvg"), "stav": summ.get("status")})
+        rh = _api_try(f"rhr {ds}", api.get_rhr_day, ds)
+        if isinstance(rh, dict):
+            metrics = rh.get("allMetrics", {}).get("metricsMap", {}) if isinstance(rh.get("allMetrics"), dict) else {}
+            vals = metrics.get("WELLNESS_RESTING_HEART_RATE") or []
+            rhr.append({"datum": ds, "rhr": (vals[-1].get("value") if vals else None)})
+
+    result["kondice"].update({
+        "vo2max":            vo2,
+        "training_status":   tstatus,
+        "fitness_age":       fage,
+        "hrv":               hrv,
+        "rhr":               rhr,
+        "endurance_score":   _api_try("endurance score", api.get_endurance_score,
+                                      start.isoformat(), today.isoformat()),
+        "running_tolerance": _api_try("running tolerance", api.get_running_tolerance,
+                                      start.isoformat(), today.isoformat()),
+        "race_predictions":  _api_try("race predictions", api.get_race_predictions),
+        "lactate_threshold": _api_try("lactate threshold", api.get_lactate_threshold, latest=True),
+        "personal_records":  _api_try("osobni rekordy", api.get_personal_record),
+        "training_readiness": _api_try("training readiness", api.get_training_readiness,
+                                       today.isoformat()),
+    })
+
+    # ── Naplánované VTP tréninky z kalendáře (pro odhalení vynechaných) ────────
+    print("Stahuji naplanovane VTP treninky z kalendare...")
+    for ev in _fetch_garmin_vtp_events(api, start, today):
+        result["naplanovano"].append({"datum": ev["date"].isoformat(), "nazev": ev["name"]})
+
+    # ── Odběhnuté aktivity ─────────────────────────────────────────────────────
+    print("Stahuji odbehnute aktivity...")
+    acts = _api_try("seznam aktivit", api.get_activities_by_date,
+                    start.isoformat(), today.isoformat()) or []
+
+    # Minulé aktivity se už nemění -> detaily z předchozího běhu recyklujeme
+    # (šetří API volání a umožní dokončit sběr přerušený rate-limitem).
+    cache = {}
+    out_path = Path(output_file)
+    if out_path.exists():
+        try:
+            with open(out_path, encoding="utf-8") as f:
+                for t in (json.load(f).get("treninky") or []):
+                    if t.get("activity_id") is not None and (t.get("useky") or t.get("serie")):
+                        cache[t["activity_id"]] = t
+        except Exception as e:
+            print(f"  [WARN] predchozi {out_path.name} nelze precist: {e}")
+    if cache:
+        print(f"  z predchoziho behu recykluji detaily {len(cache)} aktivit")
+
+    print(f"  nalezeno {len(acts)} aktivit, stahuji detaily...")
+
+    for a in acts:
+        if not isinstance(a, dict):
+            continue
+        act_id = a.get("activityId")
+        name   = str(a.get("activityName") or "").strip()
+        typ_key = ((a.get("activityType") or {}).get("typeKey") or "").lower()
+        matched = day_index.get(name)
+
+        rec = {
+            "activity_id": act_id,
+            "datum":       (a.get("startTimeLocal") or "")[:10],
+            "nazev":       name,
+            "typ_garmin":  typ_key,
+            "souhrn": {
+                "vzdalenost_m": _num(a.get("distance")),
+                "cas_s":        _num(a.get("duration")),
+                "cas_pohyb_s":  _num(a.get("movingDuration")),
+                "tempo_mps":    _num(a.get("averageSpeed"), 3),
+                "hr_avg":       a.get("averageHR"),
+                "hr_max":       a.get("maxHR"),
+                "kalorie":      a.get("calories"),
+                "te_aerobni":   a.get("aerobicTrainingEffect"),
+                "te_anaerobni": a.get("anaerobicTrainingEffect"),
+            },
+        }
+
+        if matched:
+            rec["plan"] = {
+                "tyden": matched["tyden"],
+                "den":   matched["den_code"],
+                "typ":   matched["typ"],
+            }
+            # kontrolni_test nema realne krokove cile - autoritou jsou minima
+            if matched["typ"] == "kontrolni_test":
+                rec["plan"]["minima"] = matched["day_data"].get("minima")
+            else:
+                workout = _api_try(
+                    f"plan kroky {name}",
+                    day_to_workout, matched["day_data"], name, pauza_faktor,
+                )
+                if isinstance(workout, dict):
+                    segs = workout.get("workoutSegments") or [{}]
+                    rec["plan"]["kroky"] = _trim_plan_steps(segs[0].get("workoutSteps"))
+        else:
+            rec["plan"] = None   # neodpovida zadnemu VTP dni (mimo plan / bez hodinek)
+
+        cached = cache.get(act_id)
+        if cached:
+            # detaily z predchoziho behu (aktivita v minulosti se uz nemeni)
+            for k in ("hr_zony", "useky", "serie"):
+                if cached.get(k) is not None:
+                    rec[k] = cached[k]
+        elif act_id is not None:
+            try:
+                zones = _api_try(f"hr zony {act_id}", api.get_activity_hr_in_timezones, act_id)
+                if isinstance(zones, list):
+                    rec["hr_zony"] = [
+                        {"zona": z.get("zoneNumber"), "s": _num(z.get("secsInZone"))}
+                        for z in zones if isinstance(z, dict)
+                    ]
+                if "strength" in typ_key:
+                    rec["serie"] = _trim_sets(
+                        _api_try(f"serie {act_id}", api.get_activity_exercise_sets, act_id))
+                else:
+                    rec["useky"] = _trim_laps(
+                        _api_try(f"useky {act_id}", api.get_activity_splits, act_id))
+                time.sleep(0.3)   # knihovna netlumi 429 sama, radeji nespamovat
+            except Exception as e:
+                # 429 apod. -> nedokoncene detaily nesmi zahodit uz nasbirana data
+                print(f"  [WARN] detaily {act_id} preruseny ({e}); ukladam co mam")
+                result["treninky"].append(rec)
+                break
+
+        result["treninky"].append(rec)
+
+    # ── Vynechané tréninky: naplánováno v kalendáři, ale nic se neodběhlo ─────
+    hotovo = {t["nazev"] for t in result["treninky"] if t.get("nazev")}
+    result["nesplneno"] = [
+        ev for ev in result["naplanovano"]
+        if ev["nazev"] not in hotovo and ev["datum"] < today.isoformat()
+    ]
+
+    result["meta"]["poznamky"] = (
+        "pauza_faktor ovlivnuje jen silovy/kombinace dny - u typu 'beh' je pauza v"
+        " plan.kroky presne ta, ktera byla na hodinkach."
+        " Leh-sedy a kliky z kontrolniho testu Garmin strukturovane neuklada,"
+        " z testu je pouzitelna jen vzdalenost 12min behu."
+        " treninky[].plan == null znamena aktivitu mimo VTP plan (nebo bez hodinek)."
+    )
+
+    # ── Zápis ──────────────────────────────────────────────────────────────────
+    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    size_kb = out_path.stat().st_size / 1024
+    matched_n = sum(1 for t in result["treninky"] if t.get("plan"))
+    print(f"\nUlozeno {len(result['treninky'])} treninku "
+          f"({matched_n} naparovanych na plan), {len(result['nesplneno'])} vynechanych, "
+          f"{len(result['vaha'])} zaznamu vahy "
+          f"-> {out_path.resolve()} ({size_kb:.0f} kB)")
+    if not result["treninky"]:
+        print("[WARN] Zadne aktivity - zkontroluj obdobi (--start) nebo prihlaseni.")
+    elif not matched_n:
+        print("[WARN] Zadna aktivita se nenaparovala na plan podle nazvu "
+              "(VTP-T*) - analyza planovane vs. skutecne nebude mozna.")
 
 
 def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
@@ -1468,6 +1841,10 @@ Příklady:
                    help="Stáhne seznam cviků z Garmin Connect do JSON (default: cviky-garmin.json)")
     p.add_argument("--validate-cviky", default=None, metavar="SOUBOR",
                    help="Ověří EXERCISE_MAP proti staženému JSON (výstup --fetch-cviky)")
+    p.add_argument("--fetch-vykon", nargs="?", const="vykon-garmin.json", metavar="SOUBOR",
+                   help="Stáhne reálný výkon + kondiční data z Garminu do JSON"
+                        " (default: vykon-garmin.json). Bez --start bere 140 dní dozadu."
+                        " Použij --pauza-faktor stejný jako při nahrávání plánu")
     p.add_argument("--od-tydne", type=int, default=1, metavar="N",
                    help="Začít nahrávat od týdne N (přeskočí týdny 1..N-1); default: 1")
     p.add_argument("--max-hr", type=int, default=None, metavar="N",
@@ -1480,6 +1857,16 @@ Příklady:
     elif args.fetch_cviky is not None:
         api = _connect(args.email, args.password, args.no_save)
         fetch_garmin_cviky(api, args.fetch_cviky)
+    elif args.fetch_vykon is not None:
+        api = _connect(args.email, args.password, args.no_save)
+        fetch_garmin_vykon(
+            api,
+            output_file=args.fetch_vykon,
+            plan_name=args.plan,
+            pauza_faktor=args.pauza_faktor,
+            start_override=args.start,
+            max_hr=args.max_hr,
+        )
     elif args.ics:
         # Pro ICS popisky využijeme --max-hr (jinak HR cíle zůstanou jen jako %)
         _apply_max_hr(args.max_hr)

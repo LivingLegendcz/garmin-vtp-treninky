@@ -7,3 +7,4 @@ __pycache__/
 .env
 *.ics
 cviky-garmin.json
+vykon-garmin.json
