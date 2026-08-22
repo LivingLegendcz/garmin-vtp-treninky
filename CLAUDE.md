@@ -64,6 +64,8 @@ python push_plan.py --plan muzi --start 2026-06-16 --ics --time 06:30
 ```bash
 python push_plan.py --ics-garmin
 ```
+To re-sync a shared Google Calendar after this (delete stale events, re-import), see
+[`docs/google-kalendar-sync.md`](docs/google-kalendar-sync.md).
 
 **Delete all VTP-T\* workouts from Garmin:**
 ```bash
