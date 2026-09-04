@@ -622,7 +622,10 @@ def _run_steps(kroky):
             # (napr. otevreny klus) - jinak by na konci kazdeho kola byly dve pauzy za sebou.
             if pauza_mezi and pocet > 1 and sub_steps:
                 core = list(sub_steps)
-                while core and core[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
+                # len(core) > 1: nikdy nesmaz UPLNE cely obsah (degenerovany
+                # pripad - "obsah" je jen jeden otevreny klus/pauza) - to by
+                # tise zahodilo cely predpis a kolo by skoncilo jen na pauze
+                while len(core) > 1 and core[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
                     core.pop()
                 grouped = [dict(s) for s in core]
                 grouped.append(_step("rest", "time", pauza_mezi,
