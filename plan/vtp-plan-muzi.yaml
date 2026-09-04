@@ -217,10 +217,16 @@ tydny:
       pa:
         typ: beh
         podtyp: fartlek
-        poznamka: "R = rychlejší běh, V = volný klus, úseky v minutách"
         kroky:
           - { krok: rozklusani, cas_min: 10 }
-          - { krok: beh, popis: "3R 2V, 2R 3V, 4R 1V, 1R 4V (minuty)" }
+          - { krok: beh, cas_min: 3, popis: "fartlek: rychlejší běh" }
+          - { krok: klus, cas_min: 2, popis: "fartlek: volný klus" }
+          - { krok: beh, cas_min: 2, popis: "fartlek: rychlejší běh" }
+          - { krok: klus, cas_min: 3, popis: "fartlek: volný klus" }
+          - { krok: beh, cas_min: 4, popis: "fartlek: rychlejší běh" }
+          - { krok: klus, cas_min: 1, popis: "fartlek: volný klus" }
+          - { krok: beh, cas_min: 1, popis: "fartlek: rychlejší běh" }
+          - { krok: klus, cas_min: 4, popis: "fartlek: volný klus" }
           - { krok: vyklus, cas_min: 10 }
       so:
         typ: silovy
@@ -228,9 +234,9 @@ tydny:
         kola: "3-5"
         pauza_mezi_koly_s: 120
         cviky:
-          - { cvik: klik, popis: "max opakování (min. 10)", pauza_s: 60 }
+          - { cvik: klik, popis: "max opakování (min. 10)", pauza_s: 60, lint_ok: "max pocet - konec urci cvicici" }
           - { cvik: drep_s_vyskokem, opakovani: 10, pauza_s: 60 }
-          - { cvik: leh_sed, popis: "max opakování (min. 20)", pauza_s: 60 }
+          - { cvik: leh_sed, popis: "max opakování (min. 20)", pauza_s: 60, lint_ok: "max pocet - konec urci cvicici" }
       ne: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
 
   - tyden: 6
@@ -296,9 +302,9 @@ tydny:
         typ: kombinace
         popis: "běh + silový trénink, 1 kolo"
         bloky:
-          - { cvik: sklapovacky_plus_klik, popis: "15x sklapovačky + 20x klik", serie: "3-5", pauza_s: 60 }
+          - { cvik: sklapovacky_plus_klik, popis: "15x sklapovačky + 20x klik", serie: "3-5", pauza_s: 60, lint_ok: "superserie dvou pohybu - pocty jsou v popisu" }
           - { krok: beh, vzdalenost_km: "2-3", popis: "volný běh" }
-          - { cvik: sklapovacky_plus_klik, popis: "15x sklapovačky + 20x klik", serie: "3-5", pauza_s: 60 }
+          - { cvik: sklapovacky_plus_klik, popis: "15x sklapovačky + 20x klik", serie: "3-5", pauza_s: 60, lint_ok: "superserie dvou pohybu - pocty jsou v popisu" }
       ne: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
 
   - tyden: 8
@@ -321,7 +327,9 @@ tydny:
         podtyp: pyramida
         kroky:
           - { krok: rozklusani, cas_min: 10 }
-          - { krok: pyramida, useky_m: [50, 100, 200, 400, 800, 1600, 800, 400, 200, 100, 50], cil: "75 % SFmax", pauza: "1:1 (pauza = délka úseku)" }
+          # pauza_pomer: 1 = pauza 1:1, tedy stejně dlouhá jako úsek a proklusaná
+          # (končí na VZDÁLENOST, ne na čas — dřív 1600 m dalo pauzu 1600 s)
+          - { krok: pyramida, useky_m: [50, 100, 200, 400, 800, 1600, 800, 400, 200, 100, 50], cil: "75 % SFmax", pauza_pomer: 1 }
           - { krok: vyklus, cas_min: 10 }
       pa: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
       so: { typ: volno }
@@ -343,6 +351,9 @@ tydny:
         typ: silovy
         podtyp: kruhovy_tabata
         rezim: "20 s zátěž / 10 s pauza"
+        # interval = strojově čitelná podoba `rezim`; bez něj cviky bez cas_s
+        # skončily jako otevřené kroky na lap (na hodinkách žádný odpočet)
+        interval: { zatez_s: 20, pauza_s: 10 }
         kola: "1-2"
         pauza_mezi_koly_s: 180
         cviky:
@@ -370,15 +381,23 @@ tydny:
                 pocet: 10
                 obsah:
                   - { krok: usek, vzdalenost_m: 100, cil: "90 % max úsilí" }
-                  - { krok: klus, popis: "výklus zpět na start" }
+                  - { krok: klus, popis: "výklus zpět na start", lint_ok: "proklus vlastnim tempem, delka neni fixni" }
           - { krok: vyklus, cas_min: 15 }
       so:
         typ: silovy
         kola: "3-5"
         pauza_mezi_koly_s: 60
         cviky:
-          - { cvik: plank_plus_lehsed, popis: "30 s plank + 30 s leh-sed", pauza_s: 60 }
-          - { cvik: plank_na_boku, popis: "15 s pravá / 15 s levá + 30 s kmity vlevo/vpravo s dotykem kotníků" }
+          # "30 s plank + 30 s leh-sed" rozepsané na dva kroky, ať oba mají odpočet
+          # a leh-sed má na hodinkách vlastní cvik (dřív obojí = jeden krok na lap)
+          - { cvik: plank, cas_s: 30, popis: "Plank 30 s" }
+          - { cvik: leh_sed, cas_s: 30, popis: "Leh-sedy 30 s" }
+          - cvik: plank_na_boku
+            popis: "15 s pravá / 15 s levá + 30 s kmity vlevo/vpravo s dotykem kotníků"
+            sestupne:
+              - { cas_s: 15, popis: "Plank na boku - pravá 15 s" }
+              - { cas_s: 15, popis: "Plank na boku - levá 15 s" }
+              - { cas_s: 30, popis: "Kmity vlevo/vpravo s dotykem kotníků 30 s" }
         po_treninku:
           - { cvik: klik_tleskaci, opakovani: 7, serie: 5, pauza_s: 60, popis: "klik s odrazem a tlesknutím" }
       ne: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
@@ -400,12 +419,25 @@ tydny:
         typ: silovy
         podtyp: sestupna_pyramida
         kroky_pred: "10 min rozcvičení: zahřátí, dynamické protažení, kroužení ve velkých kloubech"
-        bloky:
+        # Pozor: 'bloky' na silovém dni se dřív vůbec nečetly (čtou se 'cviky'),
+        # takže se nahrával workout s NULOU kroků. Sestupné série jsou teď
+        # v `sestupne` — pauzy jsou součást předpisu, --pauza-faktor je nekrátí.
+        cviky:
           - cvik: leh_sed
-            popis: "max úsilí: 70 s - pauza 3 min - 50 s - pauza 2 min - 30 s - pauza 1 min - 10 s"
+            popis: "max úsilí"   # zdroj: 70 s - pauza 3 min - 50 s - pauza 2 min - 30 s - pauza 1 min - 10 s
+            sestupne:
+              - { cas_s: 70, pauza_s: 180 }
+              - { cas_s: 50, pauza_s: 120 }
+              - { cas_s: 30, pauza_s: 60 }
+              - { cas_s: 10 }
           - { krok: pauza, cas_min: 5 }
           - cvik: klik
-            popis: "max úsilí: 40 s - pauza 3 min - 30 s - pauza 2 min - 20 s - pauza 1 min - 10 s"
+            popis: "max úsilí"   # zdroj: 40 s - pauza 3 min - 30 s - pauza 2 min - 20 s - pauza 1 min - 10 s
+            sestupne:
+              - { cas_s: 40, pauza_s: 180 }
+              - { cas_s: 30, pauza_s: 120 }
+              - { cas_s: 20, pauza_s: 60 }
+              - { cas_s: 10 }
       ct:
         typ: beh
         kroky:
@@ -429,9 +461,9 @@ tydny:
       ut:
         typ: silovy
         cviky:
-          - { cvik: shyb_negativni_plus_klik, popis: "10x negativní shyb (3 s brzdit, dosažná hrazda) + 10x dynamický klik", serie: "3-5", pauza_s: 60 }
+          - { cvik: shyb_negativni_plus_klik, popis: "10x negativní shyb (3 s brzdit, dosažná hrazda) + 10x dynamický klik", serie: "3-5", pauza_s: 60, lint_ok: "superserie dvou pohybu - pocty jsou v popisu" }
           - { krok: pauza, cas_min: "2-3" }
-          - { cvik: vis_pritahovani_kolen_plus_lehsed, popis: "5x vis na hrazdě s přitahováním kolen k hrudníku + 10x leh-sed", serie: "3-5", pauza_s: 60 }
+          - { cvik: vis_pritahovani_kolen_plus_lehsed, popis: "5x vis na hrazdě s přitahováním kolen k hrudníku + 10x leh-sed", serie: "3-5", pauza_s: 60, lint_ok: "superserie dvou pohybu - pocty jsou v popisu" }
       st: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
       ct: { typ: volno }
       pa:
@@ -440,15 +472,28 @@ tydny:
         kola: "2-3"
         pauza_mezi_koly_s: 180
         kroky_pred: "15 min rozklusání, ABECEDA, dynamické protažení"
+        # Dřív tu byly jen `popis` řádky, takže z celého tréninku byly dva
+        # bezstrukturní kroky na lap. Teď rozepsané na skutečné kroky.
         bloky:
-          - { popis: "1 min leh-sed, 1 min pauza, 1 min leh-sed, 30 s běh na 100 %" }
-          - { popis: "30 s klik, 30 s pauza, 30 s klik, 30 s běh na 100 %" }
+          - cvik: leh_sed
+            popis: "1 min leh-sed, 1 min pauza, 1 min leh-sed"
+            sestupne:
+              - { cas_s: 60, pauza_s: 60 }
+              - { cas_s: 60 }
+          - { krok: beh, cas_s: 30, cil: "100 % max úsilí", popis: "Běh 30 s na 100 %" }
+          - cvik: klik
+            popis: "30 s klik, 30 s pauza, 30 s klik"
+            sestupne:
+              - { cas_s: 30, pauza_s: 30 }
+              - { cas_s: 30 }
+          - { krok: beh, cas_s: 30, cil: "100 % max úsilí", popis: "Běh 30 s na 100 %" }
       so:
         typ: silovy
         cviky:
-          - { cvik: plank, rezim: "10x (20 s zátěž / 10 s pauza)" }
-          - { cvik: podrep_vydrz, rezim: "10x (20 s zátěž / 10 s pauza)" }
-          - { cvik: vis_pasivni, rezim: "10x (10 s vis / 20 s pauza)" }
+          # `rezim` je jen text pro člověka — strojová podoba je `serie` + `interval`
+          - { cvik: plank,        serie: 10, interval: { zatez_s: 20, pauza_s: 10 }, rezim: "10x (20 s zátěž / 10 s pauza)" }
+          - { cvik: podrep_vydrz, serie: 10, interval: { zatez_s: 20, pauza_s: 10 }, rezim: "10x (20 s zátěž / 10 s pauza)" }
+          - { cvik: vis_pasivni,  serie: 10, interval: { zatez_s: 10, pauza_s: 20 }, rezim: "10x (10 s vis / 20 s pauza)" }
       ne: { typ: aktivni_odpocinek, popis: "např. turistika, kolo, plavání" }
 
   - tyden: 12

@@ -73,6 +73,9 @@ python push_plan.py --plan muzi --email tvuj@email.cz --password TveHeslo
 | `--max-hr N` | Ruční max. SF pro výpočet HR cílů (override / fallback pro `--dry-run`) |
 | `--fetch-cviky [soubor]` | Stáhnout katalog cviků z Garminu do JSON (výchozí: `cviky-garmin.json`) |
 | `--validate-cviky soubor` | Ověřit `EXERCISE_MAP` proti staženému JSON |
+| `--zkontroluj-plan` | Offline kontrola převodu YAML → Garmin kroky (alias `--lint`); návratový kód 1 při nálezu |
+| `--vlastni soubor` | Jiný overlay s vlastními tréninky (výchozí: `plan/vlastni-treninky.yaml`, pokud existuje) |
+| `--bez-vlastnich` | Ignorovat overlay — čistý armádní plán |
 
 Skript je **idempotentní** — spustíš-li ho znovu, stávající workouty se smažou a nahrají znovu.
 
@@ -125,6 +128,46 @@ python push_plan.py --validate-cviky cviky-garmin.json  # porovná s EXERCISE_MA
 
 `--fetch-cviky` vyžaduje přihlášení (stahuje z `/workout-service/workout/exercise/*`), `--validate-cviky` běží offline nad staženým souborem. Validace vypíše `OK` / `ERR` pro každý cvik a u chyb navrhne nejbližší kandidáta z dané kategorie. Referenční tabulka je v `docs/garmin-mapovani-cviku.md`.
 
+#### `--zkontroluj-plan` — kontrola, že na hodinkách bude to, co je v plánu
+
+```
+python push_plan.py --plan muzi --zkontroluj-plan
+```
+
+Postaví každý den skutečnými buildery a hlásí, co by na hodinkách tiše nefungovalo:
+den, ze kterého vyjde **nula kroků**; cvik, který skončí na tlačítku (lap) **bez odpočtu
+i bez počtu opakování**; pauzu, jejíž hodnota vypadá jako vzdálenost místo sekund; cvik
+chybějící v `EXERCISE_MAP`; a klíče, které builder pro daný typ dne vůbec nečte.
+
+Běží offline (bez přihlášení, stačí `pyyaml`) a je součástí CI. Návratový kód 1 při
+jakémkoli nálezu. Rozsahy typu `"3-5"` jsou jen `INFO` — hlásí, že se použije maximum.
+
+Cvik, který **má** být otevřený (např. „max opakování" nebo superserie dvou pohybů),
+se v YAML označí `lint_ok: "důvod"` a lint ho pak jen zmíní.
+
+#### Vlastní tréninky mimo armádní plán (`plan/vlastni-treninky.yaml`)
+
+Armádní plány v `plan/vtp-plan-*.yaml` jsou **čistý přepis zdroje** — díky tomu se podle
+nich dá kdykoli začít znovu od 1. týdne (třeba rozběhání po zranění) a jdou ověřit proti
+originálu. Osobní realita patří do samostatného overlay souboru, který se slučuje až za
+běhu:
+
+```yaml
+opakovane:                 # pravidelný vlastní trénink: JEN do kalendáře, ne na Garmin
+  - { klic: hazena, den: ct, nazev: "Házená - trénink", delka_min: 90 }
+
+zmeny:                     # odchylky od armádního plánu po týdnech
+  - { tyden: 10, presun: { st: po }, zrusit: [ct] }
+  - { tyden: 11, prohodit: [ut, pa] }
+  - { tyden: 12, presun: { st: po }, zrusit: [ct] }
+```
+
+Overlay se načte automaticky, když soubor existuje; `--bez-vlastnich` ho vypne.
+Přesunutý nebo zrušený den se stane volnem a jeho **starý workout se z Garminu smaže** —
+název se odvozuje ze dne (`VTP-T10-ST-SIL` → `VTP-T10-PO-SIL`), takže by tam jinak zůstal
+jako duch. Vlastní pravidelné tréninky se doplňují i do `--ics-garmin`, jinak by ze
+sdíleného Google kalendáře po přesynchronizování zmizely.
+
 ## Export do Google Kalendáře
 
 Pokud chceš mít tréninky i v Google Kalendáři (přehled v telefonu, sdílení, notifikace):
@@ -171,6 +214,7 @@ Autoritou pro data je Garmin kalendář — `--start` a `--weeks` se ignorují. 
 | `push_plan.py` | Hlavní skript |
 | `plan/vtp-plan-muzi.yaml` | Kompletní 12týdenní plán (muži) |
 | `plan/vtp-plan-zeny.yaml` | Kompletní 12týdenní plán (ženy) |
+| `plan/vlastni-treninky.yaml` | Vlastní tréninky a úpravy **mimo** armádní plán (házená, přesuny dnů) |
 | `docs/garmin-mapovani-cviku.md` | Mapování českých cviků na Garmin exercise keys |
 | `docs/implementacni-plan.md` | Technické poznámky k implementaci |
 | `cviky-garmin.json` | Katalog cviků stažený z Garminu (výstup `--fetch-cviky`) |

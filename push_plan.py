@@ -17,6 +17,7 @@ Další spuštění (token se načte automaticky):
 """
 
 import argparse
+import copy
 import datetime
 import io
 import json
@@ -31,11 +32,18 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import yaml
 
-try:
-    from garminconnect import Garmin
-except ImportError:
-    print("Chybí knihovny. Spusť: pip install garminconnect pyyaml")
-    sys.exit(1)
+def _import_garmin():
+    """Naimportuje garminconnect az ve chvili, kdy je potreba prihlaseni.
+
+    Offline rezimy (--dry-run, --ics, --validate-cviky, --zkontroluj-plan) tak
+    bezi jen s pyyaml - diky tomu je lze spustit i v CI a mimo Windows.
+    """
+    try:
+        from garminconnect import Garmin
+    except ImportError:
+        print("Chybí knihovna garminconnect. Spusť: pip install garminconnect pyyaml")
+        sys.exit(1)
+    return Garmin
 
 PLAN_DIR  = Path(__file__).parent / "plan"
 TOKEN_DIR = Path.home() / ".garmin_tokens"
@@ -45,6 +53,7 @@ TOKEN_DIR = Path.home() / ".garmin_tokens"
 HR_ZONES = None
 MAX_HR   = None
 _HR_WARNED = False   # aby se varování "neznámá max. SF" vypsalo jen jednou
+_CVIK_WARNED = set()  # cviky mimo EXERCISE_MAP - varovat u kazdeho jen jednou
 
 # ── Mapování cviků --> (Garmin category, Garmin exerciseName) ─────────────────
 EXERCISE_MAP = {
@@ -353,8 +362,13 @@ def _cvik_label(c):
 def _build_strength_desc(day_data):
     """Kratky prehled cviku pro popis workoutu."""
     parts = []
-    for c in day_data.get("cviky", []):
-        parts.append(_cvik_label(c))
+    # 'bloky' jako fallback: silove i combo dny je pouzivaji misto 'cviky'
+    for c in day_data.get("cviky") or day_data.get("bloky") or []:
+        if c.get("krok") == "pauza":
+            continue
+        lbl = _cvik_label(c)
+        if lbl:
+            parts.append(lbl)
     kola = day_data.get("kola")
     prefix = f"{kola}x kolo: " if kola and str(kola) != "1" else ""
     return prefix + " | ".join(parts)
@@ -370,6 +384,8 @@ def _build_run_desc(day_data):
             parts.append(f"Rozklusani {k.get('cas_min',10)}min")
         elif kr == "vyklus":
             parts.append(f"Vyklus {k.get('cas_min',10)}min")
+        elif kr == "klus":
+            parts.append(f"Klus {k.get('cas_min', k.get('cas_s','?'))}min")
         elif kr == "opakovat":
             pocet = k.get("pocet", 1)
             inner = []
@@ -583,23 +599,42 @@ def _run_steps(kroky):
         elif krok == "opakovat":
             pocet      = k.get("pocet", 1)
             sub_steps  = _run_steps(k.get("obsah", []))
+            pauza_mezi = k.get("pauza_mezi_s")
+            # pauza MEZI opakovanimi (analogie pauza_mezi_koly_s v build_strength_workout/
+            # build_combo_workout) - posledni opakovani ji nedostane, nic uz nenasleduje
+            if pauza_mezi and pocet > 1 and sub_steps:
+                grouped = [dict(s) for s in sub_steps]
+                grouped.append(_step("rest", "time", pauza_mezi,
+                                     desc=f"Pauza mezi opakovanimi ({pauza_mezi}s)"))
+                out.append(_repeat_group(pocet - 1, grouped))
+                out.extend(dict(s) for s in sub_steps)
             # pokud poslední krok opakování je pauza/klus, poslední opakování ji
             # nedostane - nic dalšího uvnitř opakování už nenásleduje
-            if pocet > 1 and sub_steps and sub_steps[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
+            elif pocet > 1 and sub_steps and sub_steps[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
                 out.append(_repeat_group(pocet - 1, [dict(s) for s in sub_steps]))
                 out.extend(dict(s) for s in sub_steps[:-1])
             else:
                 out.append(_repeat_group(pocet, sub_steps))
 
         elif krok == "pyramida":
+            # Pauza mezi useky je podle zdroje "1:1", tedy STEJNE DLOUHA JAKO USEK
+            # a proklusava se -> konci na VZDALENOST, ne na cas. Driv se sem posilala
+            # delka useku v metrech jako sekundy, takze 1600 m dalo pauzu 26:40.
             cil_str = f" ({cil}){tgt_suffix}" if cil else ""
-            useky = k.get("useky_m", [])
+            useky      = k.get("useky_m", [])
+            pauza_s    = k.get("pauza_cas_s")            # varianta na cas (nepovinna)
+            pomer      = k.get("pauza_pomer", 1)         # 1 = pauza stejne dlouha jako usek
             for i, dist in enumerate(useky):
                 label = f"{dist}m{cil_str}"
                 out.append(_step("interval", "dist", dist, tgt, v1, v2, label, zone=zone))
                 # bez pauzy po poslednim useku - nasleduje uz jen vyklus
                 if i < len(useky) - 1:
-                    out.append(_step("rest", "time", dist, desc=f"Pauza {dist}s"))
+                    if pauza_s:
+                        out.append(_step("rest", "time", pauza_s, desc=f"Pauza {pauza_s}s"))
+                    else:
+                        p = max(1, int(dist * pomer))
+                        out.append(_step("recover", "dist", p,
+                                         desc=f"Klus {p}m ({pomer:g}:1)"))
 
     return _renumber(out)
 
@@ -635,6 +670,7 @@ def build_test_workout(day_data, name):
     beh_m   = minima.get("beh_12min_m", 2500)
     lehsedy = minima.get("lehsedy_1min", "?")
     kliky   = minima.get("kliky_30s", "?")
+    skok    = minima.get("skok_daleky_cm")
 
     cil_m = day_data.get("cil_beh_m")
     tgt, v1, v2, tempo_txt = "none", None, None, ""
@@ -649,6 +685,7 @@ def build_test_workout(day_data, name):
     note = (
         f"12min beh - cil min. {beh_m} m | "
         f"max leh-sedy/min (min. {lehsedy}) | max kliky/30s (min. {kliky})"
+        f"{f' | skok daleky (min. {skok} cm)' if skok else ''}"
         f"{tempo_txt}"
     )
     steps = [
@@ -661,13 +698,51 @@ def build_test_workout(day_data, name):
 
 
 # ── Strength builder ───────────────────────────────────────────────────────────
-def _cvik_steps(c, pauza_faktor=1.0):
+def _cvik_steps(c, pauza_faktor=1.0, den_interval=None):
+    """Prevede jeden cvik na Garmin kroky.
+
+    `den_interval` = {"zatez_s": 20, "pauza_s": 10} z urovne dne (tabata / kruhovy
+    rezim). Pouzije se jen u cviku, ktery nema vlastni `cas_s`/`cas_min`/`opakovani`
+    - driv takovy cvik spadl na lap.button, takze na hodinkach nebezel zadny odpocet.
+    Stejny klic `interval` lze dat i na samotny cvik (napr. "10x (20 s / 10 s)"),
+    pak prebije rezim dne.
+    """
     key     = c.get("cvik", "")
+    if key and key not in EXERCISE_MAP and key not in _CVIK_WARNED:
+        _CVIK_WARNED.add(key)
+        print(f"  [WARN] cvik '{key}' neni v EXERCISE_MAP - nahraje se jako OTHER/{key.upper()}")
     cat, ex = EXERCISE_MAP.get(key, ("OTHER", key.upper()))
     desc    = _cvik_label(c)   # Czech name + count/time
-    pauza_s = int(_int_range(c.get("pauza_s", 60), default=60) * pauza_faktor)
+    pauza_s = max(1, int(_int_range(c.get("pauza_s", 60), default=60) * pauza_faktor))
     serie   = _int_range(c.get("serie", 1))
     steps   = []
+    # 'interval' na cviku prebije rezim dne
+    den_interval = c.get("interval") or den_interval
+
+    # Sestupna pyramida: kazda serie ma vlastni dobu/pocet i vlastni pauzu.
+    # Tyhle pauzy jsou soucast PREDPISU (ne odpocinek mezi seriemi), takze je
+    # --pauza-faktor zamerne nekrati.
+    sestupne = c.get("sestupne")
+    if sestupne:
+        nazev = CVIK_CS.get(key, key.replace("_", " ").capitalize())
+        pozn  = c.get("popis")
+        for i, s in enumerate(sestupne):
+            if "opakovani" in s:
+                lbl = s.get("popis") or f"{nazev} {s['opakovani']}x"
+                steps.append(_step("interval", "reps", _int_range(s["opakovani"]),
+                                   ex_cat=cat, ex_name=ex,
+                                   desc=(lbl if s.get("popis") or not pozn else f"{lbl} - {pozn}")))
+            else:
+                secs = s.get("cas_s") or _int_range(s.get("cas_min", 1)) * 60
+                lbl  = s.get("popis") or f"{nazev} {secs}s"
+                steps.append(_step("interval", "time", secs,
+                                   ex_cat=cat, ex_name=ex,
+                                   desc=(lbl if s.get("popis") or not pozn else f"{lbl} - {pozn}")))
+            # posledni serie zustava bez pauzy
+            p = s.get("pauza_s")
+            if p and i < len(sestupne) - 1:
+                steps.append(_step("rest", "time", max(1, int(p)), desc=f"Pauza {int(p)}s"))
+        return steps
 
     for i in range(serie):
         if "cas_s" in c:
@@ -681,6 +756,16 @@ def _cvik_steps(c, pauza_faktor=1.0):
             reps = _int_range(c["opakovani"])
             steps.append(_step("interval", "reps", reps,
                                ex_cat=cat, ex_name=ex, desc=desc))
+        elif den_interval:
+            # zatez + pauza z rezimu dne; pauza je soucast predpisu -> nekrati se.
+            # Koncovou pauzu na konci kola odstrani build_strength_workout.
+            zatez = den_interval.get("zatez_s") or _int_range(den_interval.get("zatez_min", 1)) * 60
+            steps.append(_step("interval", "time", zatez,
+                               ex_cat=cat, ex_name=ex, desc=desc))
+            odpocinek = int(den_interval.get("pauza_s", 0))
+            if odpocinek > 0:
+                steps.append(_step("rest", "time", odpocinek, desc=f"Pauza {odpocinek}s"))
+            continue
         else:
             rezim = c.get("rezim", desc)
             steps.append(_step("interval", "lap",
@@ -694,18 +779,28 @@ def _cvik_steps(c, pauza_faktor=1.0):
 
 
 def build_strength_workout(day_data, name, pauza_faktor=1.0):
-    cviky       = day_data.get("cviky", [])
-    kola        = _int_range(day_data.get("kola", 1))
-    pauza_kola  = int(day_data.get("pauza_mezi_koly_s", 120) * pauza_faktor)
-    po_treninku = day_data.get("po_treninku", [])
+    cviky = day_data.get("cviky", [])
+    if not cviky and day_data.get("bloky"):
+        # Nektere silove dny nesou strukturu v 'bloky' (jako combo dny). Driv se
+        # cetly jen 'cviky', takze takovy den nahral workout s NULOU kroku.
+        cviky = day_data["bloky"]
+    kola         = _int_range(day_data.get("kola", 1))
+    pauza_kola   = max(1, int(day_data.get("pauza_mezi_koly_s", 120) * pauza_faktor))
+    po_treninku  = day_data.get("po_treninku", [])
+    den_interval = day_data.get("interval")
 
     round_steps = []
     for c in cviky:
         if c.get("krok") == "pauza":
             secs = int((c.get("cas_s") or _int_range(c.get("cas_min", 2)) * 60) * pauza_faktor)
-            round_steps.append(_step("rest", "time", secs, desc="Pauza"))
+            round_steps.append(_step("rest", "time", max(1, secs), desc="Pauza"))
         else:
-            round_steps.extend(_cvik_steps(c, pauza_faktor))
+            round_steps.extend(_cvik_steps(c, pauza_faktor, den_interval))
+
+    # Kolo nesmi skoncit pauzou - u intervalovych rezimu (tabata) prijde pauza
+    # po kazdem cviku vcetne posledniho, tak ji tady zahodime.
+    while round_steps and round_steps[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
+        round_steps.pop()
 
     if kola > 1 and round_steps:
         # posledni kolo bez navazujici pauzy - trenink pak rovnou konci
@@ -737,22 +832,37 @@ def build_combo_workout(day_data, name, pauza_faktor=1.0):
         if "cvik" in b:
             round_steps.extend(_cvik_steps(b, pauza_faktor))
         elif b.get("krok") == "beh":
-            raw = b.get("vzdalenost_km")
-            vzd_m = None
-            if raw:
+            vzd_m = b.get("vzdalenost_m")
+            raw   = b.get("vzdalenost_km")
+            if vzd_m is None and raw:
                 km = _int_range(raw) if isinstance(raw, str) and "-" in raw else float(raw)
                 vzd_m = km * 1000
+            # beh v combo bloku muze byt i na cas (napr. "30 s beh na 100 %") -
+            # driv se takovy krok tise degradoval na lap.button
+            secs = b.get("cas_s") or (_int_range(b["cas_min"]) * 60 if "cas_min" in b else None)
             cil = b.get("cil")
             tgt, v1, v2, zone, tgt_suffix = _resolve_step_target(cil, vzd_m)
             label = (b.get("popis", "Beh") + tgt_suffix) if cil else b.get("popis", "Beh")
             if vzd_m:
                 round_steps.append(_step("interval", "dist", int(vzd_m),
                                          tgt=tgt, v1=v1, v2=v2, desc=label, zone=zone))
+            elif secs:
+                round_steps.append(_step("interval", "time", secs,
+                                         tgt=tgt, v1=v1, v2=v2, desc=label, zone=zone))
             else:
                 round_steps.append(_step("interval", "lap",
                                          tgt=tgt, v1=v1, v2=v2, desc=label, zone=zone))
         else:
+            # blok bez cviku i behu = jen text; na hodinkach z nej nemuze byt
+            # nic jineho nez otevreny krok na lap.button
+            if not b.get("lint_ok"):
+                print(f"  [WARN] blok bez struktury (jen popis): {b.get('popis', '')!r}"
+                      f" - nahraje se jako otevreny krok na lap")
             round_steps.append(_step("interval", "lap", desc=b.get("popis", "")))
+
+    # kolo nesmi skoncit pauzou
+    while round_steps and round_steps[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
+        round_steps.pop()
 
     if kola > 1 and round_steps:
         # posledni kolo bez navazujici pauzy - trenink pak rovnou konci
@@ -785,6 +895,141 @@ def day_to_workout(day_data, name, pauza_faktor=1.0):
     return None
 
 
+# ── Overlay: vlastni treninky a upravy MIMO armadni plan ───────────────────────
+# Armadni plany (plan/vtp-plan-*.yaml) zustavaji cistym prepisem zdroje, aby se
+# podle nich dalo kdykoli zacit znovu od tydne 1 a aby se daly overit proti
+# originalu. Vlastni realita (pravidelna hazena ve ctvrtek, presuny dnu kolem ni)
+# zije v samostatnem souboru a slucuje se az za behu.
+
+VLASTNI_FILE = PLAN_DIR / "vlastni-treninky.yaml"
+_VOLNO = {"typ": "volno"}
+
+
+def _je_volny(day_data):
+    return not day_data or day_data.get("typ", "volno") in ("volno", "aktivni_odpocinek")
+
+
+def load_overlay(path=None, vypnuto=False):
+    """Nacte overlay s vlastnimi treninky. Vraci {} kdyz nic neni k dispozici.
+
+    Bez `--vlastni` se bere konvencni cesta plan/vlastni-treninky.yaml, a kdyz
+    neexistuje, tise se preskoci (cista instalace / CI se chovaji jako driv).
+    Explicitne zadana cesta, ktera neexistuje, je chyba.
+    """
+    if vypnuto:
+        return {}
+    if path:
+        p = Path(path)
+        if not p.exists():
+            print(f"CHYBA: overlay soubor {p} neexistuje.")
+            sys.exit(1)
+    else:
+        p = VLASTNI_FILE
+        if not p.exists():
+            return {}
+    with open(p, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def apply_overlay(plan, overlay):
+    """Slouci armadni plan s vlastnimi upravami.
+
+    Vraci (efektivni_plan, osirele_nazvy). Presunuty i zruseny den se v
+    efektivnim planu stane 'volno' - diky tomu nepotrebuje zadny builder,
+    ICS ani dispatcher novy typ dne. `osirele_nazvy` jsou workouty, ktere pod
+    starym jmenem zustaly na Garminu (jmeno se odvozuje ze dne, takze presun
+    ST -> PO zmeni VTP-T10-ST-SIL na VTP-T10-PO-SIL) a je treba je smazat.
+    """
+    if not overlay or not overlay.get("zmeny"):
+        return plan, []
+
+    plan = copy.deepcopy(plan)
+    osirele = []
+    tydny = {t.get("tyden"): t for t in plan.get("tydny", [])}
+
+    for z in overlay.get("zmeny") or []:
+        tyden = z.get("tyden")
+        tdata = tydny.get(tyden)
+        if not tdata:
+            print(f"  [WARN] overlay: tyden {tyden} v planu neexistuje")
+            continue
+        dny = tdata.setdefault("dny", {})
+
+        prohodit = z.get("prohodit")
+        if prohodit and len(prohodit) == 2:
+            a, b = prohodit
+            da, db = dny.get(a), dny.get(b)
+            dny[a], dny[b] = db, da
+            for den, d in ((a, da), (b, db)):
+                if not _je_volny(d):
+                    osirele.append(_vtp_name(tyden, den, d.get("typ")))
+
+        for zdroj, cil in (z.get("presun") or {}).items():
+            d = dny.get(zdroj)
+            if _je_volny(d):
+                print(f"  [WARN] overlay T{tyden}: v '{zdroj}' neni co presouvat")
+                continue
+            if not _je_volny(dny.get(cil)):
+                print(f"  [WARN] overlay T{tyden}: cilovy den '{cil}' neni volny"
+                      f" - '{zdroj}' zustava na miste")
+                continue
+            dny[cil] = d
+            dny[zdroj] = dict(_VOLNO)
+            osirele.append(_vtp_name(tyden, zdroj, d.get("typ")))
+
+        for den in z.get("zrusit") or []:
+            d = dny.get(den)
+            if _je_volny(d):
+                continue
+            dny[den] = dict(_VOLNO)
+            osirele.append(_vtp_name(tyden, den, d.get("typ")))
+
+        for den, d in (z.get("pridat") or {}).items():
+            if not _je_volny(dny.get(den)):
+                print(f"  [WARN] overlay T{tyden}: '{den}' neni volny"
+                      f" - vlastni trenink se nepridava")
+                continue
+            dny[den] = d
+
+    # Jmeno, ktere v efektivnim planu dal existuje, osirele neni (po prohozeni
+    # dvou dnu se cast jmen jen vymeni).
+    aktualni = set()
+    for t in plan.get("tydny", []):
+        for den, d in (t.get("dny") or {}).items():
+            if not _je_volny(d):
+                aktualni.add(_vtp_name(t["tyden"], den, d.get("typ")))
+
+    return plan, [n for n in dict.fromkeys(osirele) if n not in aktualni]
+
+
+def vlastni_ics_events(overlay, start_date, end_date):
+    """Pravidelne vlastni treninky (hazena) jako udalosti do kalendare.
+
+    Zamerne se NEnahravaji na Garmin - hodinkam by prazdny workout nepomohl.
+    Diky tomu, ze se generuji z datoveho rozsahu (a ne z tydnu planu), funguje
+    to i v --ics-garmin, kde autoritou dat je Garmin kalendar a cislo tydne 1
+    se nikde nepocita.
+    """
+    out = []
+    for e in overlay.get("opakovane") or []:
+        den = e.get("den")
+        if den not in DEN_DELTA:
+            print(f"  [WARN] overlay: neznamy den '{den}' u vlastniho treninku")
+            continue
+        d = start_date
+        while d <= end_date:
+            if d.weekday() == DEN_DELTA[den]:
+                out.append({
+                    "date":     d,
+                    "klic":     e.get("klic", "vlastni"),
+                    "nazev":    e.get("nazev") or e.get("klic", "Vlastni trenink"),
+                    "popis":    e.get("popis", ""),
+                    "delka_min": e.get("delka_min", 60),
+                })
+            d += datetime.timedelta(days=1)
+    return out
+
+
 # ── Garmin Connect I/O ─────────────────────────────────────────────────────────
 def _connect(email=None, password=None, no_save=False):
     """Připojí se ke Garmin Connect. Token se uloží do TOKEN_DIR (pokud není --no-save).
@@ -794,6 +1039,7 @@ def _connect(email=None, password=None, no_save=False):
     ale ta MFA nikdy nesignalizuje: bez `prompt_mfa`/`return_on_mfa` knihovna
     rovnou vyhodí GarminConnectAuthenticationError.)
     """
+    Garmin = _import_garmin()
     api = Garmin(
         email or None,
         password or None,
@@ -1003,6 +1249,243 @@ def validate_exercise_map(garmin_json_path):
         print("Uprav EXERCISE_MAP v push_plan.py dle výše.")
 
 
+# ── Lint: kontrola prevodu YAML -> Garmin kroky ────────────────────────────────
+# Smysl: kazdou tichou degradaci prevodu odhalit OFFLINE, drive nez se workout
+# nahraje a clovek na to prijde az na hodinkach pri treninku. Presne tyhle chyby
+# se takhle nasly: pauza v pyramide v metrech misto sekund, tabata bez odpoctu,
+# silovy den s 'bloky' misto 'cviky' (= workout s nulou kroku).
+
+_LINT_CISLO_RE  = re.compile(r"\d+\s*(?:x|s\b|sec|min)", re.IGNORECASE)
+_LINT_ROZSAH_RE = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*-\s*\d+(?:[.,]\d+)?\s*$")
+
+
+def _lint_flat(steps):
+    """Rozbali repeat grupy - vrati plochy seznam vykonnych kroku."""
+    out = []
+    for s in steps or []:
+        if not isinstance(s, dict):
+            continue
+        if s.get("type") == "RepeatGroupDTO":
+            out.extend(_lint_flat(s.get("workoutSteps")))
+        else:
+            out.append(s)
+    return out
+
+
+def _lint_polozky(day_data):
+    """Vsechny polozky cviku/bloku/kroku dne (i po_treninku, vnorene faze
+    a vnorene 'opakovat' bloky u behu)."""
+    out = []
+    for klic in ("cviky", "bloky", "po_treninku"):
+        for it in day_data.get(klic) or []:
+            if isinstance(it, dict):
+                out.append(it)
+
+    def _walk_kroky(kroky):
+        for k in kroky or []:
+            if not isinstance(k, dict):
+                continue
+            out.append(k)
+            if k.get("krok") == "opakovat":
+                _walk_kroky(k.get("obsah"))
+
+    _walk_kroky(day_data.get("kroky"))
+    return out
+
+
+class _TrackedDict(dict):
+    """Pouziva se jen uvnitr lint_plan() - zaznamena, ktere klice byly
+    precteny (__getitem__/get/__contains__) pri stavbe workoutu, aby lint
+    odhalil klic, ktery YAML nese, ale zadny builder ho nikdy nenacte."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._touched = set()
+
+    def __getitem__(self, key):
+        self._touched.add(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        self._touched.add(key)
+        return super().get(key, default)
+
+    def __contains__(self, key):
+        self._touched.add(key)
+        return super().__contains__(key)
+
+
+def _track_wrap(obj):
+    """Rekurzivne obali dicty do _TrackedDict; listy prochazi, scalary necha."""
+    if isinstance(obj, dict):
+        return _TrackedDict((k, _track_wrap(v)) for k, v in obj.items())
+    if isinstance(obj, list):
+        return [_track_wrap(v) for v in obj]
+    return obj
+
+
+# Klice, ktere jsou zamerne jen lidska dokumentace duplikujici uz strukturovana
+# data (podtyp/rezim), nebo je cte jen samotny lint a nikdy zadny builder
+# (lint_ok) - bez teto vyjimky by kazda existujici lint_ok anotace byla sama
+# nahlasena jako "nikdy neprectena".
+_LINT_IGNOROVANE_KLICE = {"podtyp", "rezim", "lint_ok"}
+
+
+def _track_unused(obj, cesta=""):
+    """Projde wrapnuty strom a vrati [(cesta, hodnota), ...] pro klice, ktere
+    pri stavbe workoutu nebyly precteny. Pokud klic byl precten, rekurze
+    pokracuje do jeho hodnoty; pokud ne, nahlasi se jen on sam."""
+    out = []
+    if isinstance(obj, _TrackedDict):
+        for k, v in obj.items():
+            klic_cesta = f"{cesta}.{k}" if cesta else str(k)
+            if k not in obj._touched:
+                if k not in _LINT_IGNOROVANE_KLICE:
+                    out.append((klic_cesta, v))
+            else:
+                out.extend(_track_unused(v, klic_cesta))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            out.extend(_track_unused(v, f"{cesta}[{i}]"))
+    return out
+
+
+def _lint_rozsahy(obj, cesta=""):
+    """Najde vsechny hodnoty typu "3-5" (rozsah) - resolvuji se na MAXIMUM."""
+    out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out.extend(_lint_rozsahy(v, f"{cesta}.{k}" if cesta else str(k)))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            out.extend(_lint_rozsahy(v, f"{cesta}[{i}]"))
+    elif isinstance(obj, str) and _LINT_ROZSAH_RE.match(obj):
+        out.append((cesta, obj))
+    return out
+
+
+def lint_plan(plan_name="muzi", pauza_faktor=1.0, vlastni=None, bez_vlastnich=False):
+    """Projde vsechny dny planu, postavi workouty realnymi buildery a nahlasi
+    kroky, ze kterych by na hodinkach vznikla nesmyslna nebo prazdna jednotka.
+    Kontrola je typove agnosticka - bezi stejne pro beh/silovy/kombinace/test,
+    vcetne generickeho nalezu "tenhle klic z YAML se pri stavbe nikdy necetl"
+    (viz _TrackedDict/_track_unused), ktery odhali tiche zahozeni hodnoty bez
+    ohledu na typ dne.
+
+    Bezi OFFLINE (bez prihlaseni), takze se da poustet i v CI.
+    Polozku, ktera ma byt zamerne otevrena (napr. "max opakovani", proklus
+    vlastnim tempem), oznac v YAML klicem `lint_ok: "duvod"` - lint ji pak
+    nenahlasi.
+    """
+    plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
+    if not plan_file.exists():
+        print(f"CHYBA: soubor {plan_file} neexistuje.")
+        sys.exit(1)
+    with open(plan_file, encoding="utf-8") as f:
+        plan = yaml.safe_load(f)
+
+    # kontroluje se EFEKTIVNI plan - vlastni pridane dny musi projit taky
+    overlay = load_overlay(vlastni, bez_vlastnich)
+    plan, _ = apply_overlay(plan, overlay)
+
+    print(f"Kontrola prevodu: {plan_file.name} (pauza_faktor {pauza_faktor})"
+          f"{' + overlay' if overlay else ''}\n")
+    chyby, infa, dnu = [], [], 0
+
+    for tyden_data in plan.get("tydny", []):
+        tyden = tyden_data["tyden"]
+        for den_key, day_data in (tyden_data.get("dny") or {}).items():
+            if not day_data:
+                continue
+            typ = day_data.get("typ", "volno")
+            if typ in ("volno", "aktivni_odpocinek", "hazena"):
+                continue
+            dnu += 1
+            kde  = f"T{tyden:02d} {DEN_CODE[den_key]}"
+            name = _vtp_name(tyden, den_key, typ)
+
+            # klice, ktere builder pro dany typ vubec necte
+            if typ == "silovy" and day_data.get("bloky") and not day_data.get("cviky"):
+                infa.append(f"{kde} {name}: pouziva 'bloky' na silovem dni"
+                            f" - cte se jako 'cviky' (fallback)")
+            if typ == "kombinace" and day_data.get("cviky") and not day_data.get("bloky"):
+                chyby.append(f"{kde} {name}: 'cviky' na combo dni se NECTE - patri do 'bloky'")
+
+            # neznamy cvik
+            for it in _lint_polozky(day_data):
+                k = it.get("cvik")
+                if k and k not in EXERCISE_MAP:
+                    chyby.append(f"{kde} {name}: cvik '{k}' neni v EXERCISE_MAP")
+
+            day_data_wrapped = _track_wrap(day_data)
+            workout = day_to_workout(day_data_wrapped, name, pauza_faktor)
+            if workout is None:
+                chyby.append(f"{kde} {name}: typ '{typ}' nevyrobil zadny workout")
+                continue
+
+            # generický nález: klic z YAML, ktery pri stavbe tohoto dne
+            # (bez ohledu na typ) zadny builder nikdy neprecetl
+            for cesta, hodnota in _track_unused(day_data_wrapped):
+                chyby.append(f"{kde} {name}: klic '{cesta}' se pri stavbe tohoto"
+                             f" dne (typ '{typ}') nikdy necte - hodnota {hodnota!r}"
+                             f" se ztrati")
+
+            steps = _lint_flat(workout["workoutSegments"][0]["workoutSteps"])
+            if not steps:
+                chyby.append(f"{kde} {name}: workout ma NULA kroku"
+                             f" - na hodinkach bude prazdny")
+                continue
+
+            # polozky zamerne otevrene (lint_ok) pozname podle popisku kroku
+            povoleno = set()
+            for it in _lint_polozky(day_data):
+                if it.get("lint_ok"):
+                    povoleno.add(_cvik_label(it))
+
+            for i, s in enumerate(steps):
+                konec = (s.get("endCondition") or {}).get("conditionTypeKey")
+                hod   = s.get("endConditionValue")
+                popis = s.get("description") or ""
+
+                if konec == "lap.button" and popis not in povoleno:
+                    cisla = _LINT_CISLO_RE.findall(popis)
+                    detail = (f" (v popisu jsou cisla {cisla} - nedostala se do kroku)"
+                              if cisla else "")
+                    chyby.append(f"{kde} {name}: krok konci na tlacitko (lap) bez"
+                                 f" odpoctu i poctu: {popis!r}{detail}")
+
+                if konec in ("time", "distance") and not hod:
+                    chyby.append(f"{kde} {name}: krok {popis!r} ma end condition"
+                                 f" '{konec}' bez hodnoty - Garmin ho odmitne")
+
+                # regresni pojistka na pyramidovy bug: pauza na CAS s hodnotou
+                # rovnou vzdalenosti predchazejiciho useku
+                if i > 0 and konec == "time":
+                    p = steps[i - 1]
+                    p_konec = (p.get("endCondition") or {}).get("conditionTypeKey")
+                    if (p_konec == "distance"
+                            and s["stepType"]["stepTypeKey"] in ("rest", "recovery")
+                            and hod and hod == p.get("endConditionValue")):
+                        chyby.append(f"{kde} {name}: pauza {int(hod)} s ma stejnou"
+                                     f" hodnotu jako predchazejici usek {int(hod)} m"
+                                     f" - zamena metru za sekundy?")
+
+            for cesta, raw in _lint_rozsahy(day_data):
+                infa.append(f"{kde} {name}: {cesta} = {raw!r} -> pouzije se MAX"
+                            f" {_int_range(raw)}")
+
+    for m in infa:
+        print(f"  INFO {m}")
+    if infa:
+        print()
+    for m in chyby:
+        print(f"  ERR  {m}")
+
+    print(f"\nVysledek: {dnu} dnu zkontrolovano, {len(chyby)} nalezu"
+          f" ({len(infa)} informativnich).")
+    return len(chyby)
+
+
 # ── Stažení reálného výkonu z Garminu ──────────────────────────────────────────
 # Garmin k nazvu aktivity casto predradi lokalitu ("Praha - VTP-T04-UT-BEH"),
 # takze presna shoda nazvu workoutu nefunguje - VTP kod hledame kdekoli v textu.
@@ -1115,7 +1598,8 @@ def _trim_plan_steps(steps):
 
 
 def fetch_garmin_vykon(api, output_file="vykon-garmin.json", plan_name="muzi",
-                       pauza_faktor=1.0, start_override=None, max_hr=None):
+                       pauza_faktor=1.0, start_override=None, max_hr=None,
+                       vlastni=None, bez_vlastnich=False):
     """Stáhne REÁLNÝ výkon + kondiční data z Garmin Connectu do jednoho JSONu.
 
     Výstup slouží k offline analýze: ke každé odběhnuté aktivitě se podle názvu
@@ -1133,6 +1617,8 @@ def fetch_garmin_vykon(api, output_file="vykon-garmin.json", plan_name="muzi",
     with open(plan_file, encoding="utf-8") as f:
         plan = yaml.safe_load(f)
 
+    # efektivni plan, aby presunute dny nasly svuj planovany obsah podle nazvu
+    plan, _ = apply_overlay(plan, load_overlay(vlastni, bez_vlastnich))
     day_index = _index_plan_by_name(plan)
 
     today = datetime.date.today()
@@ -1378,13 +1864,20 @@ def fetch_garmin_vykon(api, output_file="vykon-garmin.json", plan_name="muzi",
 
 def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
               email=None, password=None, no_save=False, start_override=None,
-              pauza_faktor=1.0, from_week=1, max_hr=None):
+              pauza_faktor=1.0, from_week=1, max_hr=None,
+              vlastni=None, bez_vlastnich=False):
     plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
     if not plan_file.exists():
         print(f"CHYBA: soubor {plan_file} neexistuje.")
         sys.exit(1)
     with open(plan_file, encoding="utf-8") as f:
         plan = yaml.safe_load(f)
+
+    overlay = load_overlay(vlastni, bez_vlastnich)
+    plan, osirele = apply_overlay(plan, overlay)
+    if osirele:
+        print(f"Overlay: {len(osirele)} workoutu zmenilo den"
+              f" - stare nazvy se smazou ({', '.join(osirele)})")
 
     # Datum začátku: --start má přednost před YAML
     if start_override:
@@ -1418,6 +1911,22 @@ def push_plan(plan_name="muzi", weeks_limit=None, dry_run=False,
     else:
         # dry-run: zóny z Connectu nedostupné, využij jen --max-hr (pokud zadáno)
         _load_hr_state(None, max_hr_override=max_hr)
+
+    # Uklid po overlay: workout, ktery se presunul na jiny den, zustal na Garminu
+    # pod starym nazvem a naplanoval by se navek. Maze se bez ohledu na
+    # --od-tydne, protoze nejde o nahravani, ale o odstraneni duchu.
+    for stary in osirele:
+        if dry_run:
+            if stary in existing_by_name:
+                print(f"  [DRY] smazal bych osirely workout {stary}")
+            continue
+        wid = existing_by_name.pop(stary, None)
+        if wid:
+            try:
+                api.delete_workout(wid)
+                print(f"  smazan osirely workout {stary} (presun/zruseni v overlay)")
+            except Exception as e:
+                print(f"  [WARN] {stary}: smazani selhalo: {e}")
 
     total = 0
     for tyden_data in plan.get("tydny", []):
@@ -1610,7 +2119,8 @@ def _ics_description(day_data):
         return _build_run_desc(day_data) or "Beh"
     if typ == "kombinace":
         parts = []
-        if day_data.get("cviky"):
+        # combo dny nesou cviky v 'bloky', ne v 'cviky' - driv byl popis prazdny
+        if day_data.get("cviky") or day_data.get("bloky"):
             parts.append(_build_strength_desc(day_data))
         if day_data.get("kroky"):
             run_desc = _build_run_desc(day_data)
@@ -1623,7 +2133,8 @@ def _ics_description(day_data):
 
 
 def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None,
-                 out_file="vtp-plan.ics", start_time=None):
+                 out_file="vtp-plan.ics", start_time=None,
+                 vlastni=None, bez_vlastnich=False):
     """Vygeneruje ICS soubor pro import do Google Kalendáře."""
     plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
     if not plan_file.exists():
@@ -1631,6 +2142,9 @@ def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None,
         sys.exit(1)
     with open(plan_file, encoding="utf-8") as f:
         plan = yaml.safe_load(f)
+
+    overlay = load_overlay(vlastni, bez_vlastnich)
+    plan, _ = apply_overlay(plan, overlay)
 
     if start_override:
         start_date = datetime.date.fromisoformat(start_override)
@@ -1675,6 +2189,17 @@ def generate_ics(plan_name="muzi", weeks_limit=None, start_override=None,
             ics_lines.extend(_ics_vevent(uid, summary, date, desc=desc, t=t,
                                          duration_min=_estimate_duration_min(day_data)))
             count += 1
+
+    # vlastni pravidelne treninky (hazena) - jen do kalendare, ne na Garmin
+    tydnu = weeks_limit or len(plan.get("tydny", [])) or 12
+    for ev in vlastni_ics_events(overlay, start_date,
+                                 start_date + datetime.timedelta(weeks=tydnu)
+                                 - datetime.timedelta(days=1)):
+        ics_lines.extend(_ics_vevent(
+            f"vlastni-{ev['klic']}-{ev['date']:%Y%m%d}@garmin-treninky",
+            ev["nazev"], ev["date"], desc=ev["popis"], t=t,
+            duration_min=ev["delka_min"]))
+        count += 1
 
     ics_lines.append("END:VCALENDAR\r\n")
 
@@ -1753,13 +2278,18 @@ def _fetch_garmin_vtp_events(api, start_date, end_date):
 
 def generate_ics_from_garmin(plan_name="muzi", out_file="vtp-garmin.ics",
                              start_time=None, email=None, password=None,
-                             no_save=False, max_hr=None):
+                             no_save=False, max_hr=None,
+                             vlastni=None, bez_vlastnich=False):
     """Vygeneruje ICS ze SKUTEČNĚ naplánovaných VTP-T* tréninků na Garmin
-    kalendáři (od dneška dál).
+    kalendáři (od dneška dál) + vlastních pravidelných tréninků z overlay.
 
     Autoritou pro data je Garmin kalendář — použij po ručním přeházení
     termínů na Garminu, kdy lokální YAML + --start už neodpovídá realitě.
     Popis a odhad délky se dohledávají zpětně z YAML plánu podle názvu.
+
+    Vlastní tréninky (házená) na Garminu nejsou a nikdy nebudou, takže se
+    doplňují z overlay podle dne v týdnu — jinak by ze sdíleného Google
+    kalendáře po přesynchronizování zmizely.
     """
     plan_file = PLAN_DIR / f"vtp-plan-{plan_name}.yaml"
     if not plan_file.exists():
@@ -1768,6 +2298,10 @@ def generate_ics_from_garmin(plan_name="muzi", out_file="vtp-garmin.ics",
     with open(plan_file, encoding="utf-8") as f:
         plan = yaml.safe_load(f)
 
+    overlay = load_overlay(vlastni, bez_vlastnich)
+    # index se staví z EFEKTIVNÍHO plánu, aby přesunutý den (VTP-T10-PO-SIL)
+    # našel svůj popis
+    plan, _ = apply_overlay(plan, overlay)
     day_index = _index_plan_by_name(plan)
     t = _parse_time_arg(start_time)
 
@@ -1783,7 +2317,11 @@ def generate_ics_from_garmin(plan_name="muzi", out_file="vtp-garmin.ics",
 
     print(f"Nacitám Garmin kalendar {today} az {end_date}...")
     events = _fetch_garmin_vtp_events(api, today, end_date)
-    if not events:
+    # vlastni treninky jen do posledni skutecne naplanovane udalosti - dal uz
+    # plan nepokracuje a hazena by se sypala do nekonecna
+    vlastni_do = events[-1]["date"] if events else today
+    vlastni_ev = vlastni_ics_events(overlay, today, vlastni_do)
+    if not events and not vlastni_ev:
         print(f"Zadne naplanovane VTP-T* treninky v rozsahu {today} az {end_date}.")
         return
 
@@ -1826,13 +2364,24 @@ def generate_ics_from_garmin(plan_name="muzi", out_file="vtp-garmin.ics",
                                      duration_min=duration_min))
         count += 1
 
+    for ev in vlastni_ev:
+        print(f"  {ev['date']}  {ev['nazev']} (vlastni, mimo Garmin)")
+        ics_lines.extend(_ics_vevent(
+            f"vlastni-{ev['klic']}-{ev['date']:%Y%m%d}@garmin-treninky",
+            ev["nazev"], ev["date"], desc=ev["popis"], t=t,
+            duration_min=ev["delka_min"]))
+        count += 1
+
     ics_lines.append("END:VCALENDAR\r\n")
 
     out_path = Path(out_file)
     out_path.write_bytes("".join(ics_lines).encode("utf-8"))
     print(f"\nVygenerovano {count} udalosti ze skutecneho Garmin kalendare"
           f" -> {out_path.resolve()}")
-    print(f"Rozsah: {events[0]['date']} az {events[-1]['date']}")
+    if vlastni_ev:
+        print(f"  z toho {len(vlastni_ev)} vlastnich treninku z overlay")
+    if events:
+        print(f"Rozsah: {events[0]['date']} az {events[-1]['date']}")
     if weeks_found and max(weeks_found) < total_weeks:
         print(f"  [WARN] Posledni nalezeny tyden je T{max(weeks_found):02d}"
               f" z {total_weeks} - zkontroluj Garmin kalendar, plan mozna"
@@ -1881,18 +2430,32 @@ Příklady:
                    help="Stáhne seznam cviků z Garmin Connect do JSON (default: cviky-garmin.json)")
     p.add_argument("--validate-cviky", default=None, metavar="SOUBOR",
                    help="Ověří EXERCISE_MAP proti staženému JSON (výstup --fetch-cviky)")
+    p.add_argument("--zkontroluj-plan", "--lint", dest="lint", action="store_true",
+                   help="Offline kontrola převodu YAML -> Garmin kroky (bez přihlášení)."
+                        " Hlásí prázdné workouty, cviky bez odpočtu/počtu a záměnu jednotek."
+                        " Návratový kód 1 při nálezu — použitelné v CI")
     p.add_argument("--fetch-vykon", nargs="?", const="vykon-garmin.json", metavar="SOUBOR",
                    help="Stáhne reálný výkon + kondiční data z Garminu do JSON"
                         " (default: vykon-garmin.json). Bez --start bere 140 dní dozadu."
                         " Použij --pauza-faktor stejný jako při nahrávání plánu")
     p.add_argument("--od-tydne", type=int, default=1, metavar="N",
                    help="Začít nahrávat od týdne N (přeskočí týdny 1..N-1); default: 1")
+    p.add_argument("--vlastni", default=None, metavar="SOUBOR",
+                   help="Overlay s vlastními tréninky a úpravami mimo armádní plán"
+                        f" (default: {VLASTNI_FILE.name} v plan/, pokud existuje)")
+    p.add_argument("--bez-vlastnich", action="store_true",
+                   help="Ignorovat overlay — čistý armádní plán (např. rozběhání po zranění)")
     p.add_argument("--max-hr", type=int, default=None, metavar="N",
                    help="Ruční max. SF pro výpočet HR cílů (override / fallback pro --dry-run)."
                         " Priorita: --max-hr > zóny z Garmin Connect > bez HR cíle")
     args = p.parse_args()
 
-    if args.validate_cviky:
+    if args.lint:
+        sys.exit(1 if lint_plan(plan_name=args.plan,
+                                pauza_faktor=args.pauza_faktor,
+                                vlastni=args.vlastni,
+                                bez_vlastnich=args.bez_vlastnich) else 0)
+    elif args.validate_cviky:
         validate_exercise_map(args.validate_cviky)
     elif args.fetch_cviky is not None:
         api = _connect(args.email, args.password, args.no_save)
@@ -1906,6 +2469,8 @@ Příklady:
             pauza_faktor=args.pauza_faktor,
             start_override=args.start,
             max_hr=args.max_hr,
+            vlastni=args.vlastni,
+            bez_vlastnich=args.bez_vlastnich,
         )
     elif args.ics:
         # Pro ICS popisky využijeme --max-hr (jinak HR cíle zůstanou jen jako %)
@@ -1916,6 +2481,8 @@ Příklady:
             start_override=args.start,
             out_file=args.ics,
             start_time=args.time,
+            vlastni=args.vlastni,
+            bez_vlastnich=args.bez_vlastnich,
         )
     elif args.ics_garmin is not None:
         generate_ics_from_garmin(
@@ -1926,6 +2493,8 @@ Příklady:
             password=args.password,
             no_save=args.no_save,
             max_hr=args.max_hr,
+            vlastni=args.vlastni,
+            bez_vlastnich=args.bez_vlastnich,
         )
     elif args.delete:
         delete_vtp_workouts(args.email, args.password, args.no_save)
@@ -1941,6 +2510,8 @@ Příklady:
             pauza_faktor=args.pauza_faktor,
             from_week=args.od_tydne,
             max_hr=args.max_hr,
+            vlastni=args.vlastni,
+            bez_vlastnich=args.bez_vlastnich,
         )
 
 

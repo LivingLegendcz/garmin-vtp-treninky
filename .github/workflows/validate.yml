@@ -41,3 +41,11 @@ jobs:
 
           print("Vsechny plany jsou validni.")
           EOF
+
+      # Postavi kazdy den realnymi buildery a hlida tichou degradaci prevodu:
+      # prazdne workouty, cviky bez odpoctu i poctu, zamenu metru za sekundy.
+      # Bezi offline - garminconnect se importuje az pri prihlaseni.
+      - name: Kontrola prevodu YAML -> Garmin kroky
+        run: |
+          python push_plan.py --plan muzi --zkontroluj-plan
+          python push_plan.py --plan zeny --zkontroluj-plan

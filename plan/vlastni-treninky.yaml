@@ -1,0 +1,80 @@
+# Vlastní tréninky a úpravy MIMO armádní VTP plán
+#
+# Proč zvlášť: plan/vtp-plan-muzi.yaml a plan/vtp-plan-zeny.yaml jsou čistý přepis
+# armádního zdroje (doarmady.mo.gov.cz) — díky tomu se podle nich dá kdykoli začít
+# znovu od 1. týdne (např. rozběhání po zranění) a jde je ověřit proti originálu.
+# Osobní realita patří sem a slučuje se až za běhu (funkce apply_overlay).
+#
+# Načítá se automaticky, když tento soubor existuje. Vypnout: --bez-vlastnich
+# Jiný soubor: --vlastni cesta/k/souboru.yaml
+#
+# Klíče:
+#   opakovane[]  … pravidelný vlastní trénink. Jde JEN do kalendáře (ICS),
+#                  na Garmin se nikdy nenahrává — hodinkám by prázdný workout nepomohl.
+#     klic, den (po/ut/st/ct/pa/so/ne), nazev, popis, delka_min
+#   zmeny[]      … odchylky od armádního plánu, po týdnech:
+#     prohodit: [den_a, den_b]   … vymění obsah dvou dnů
+#     presun:   { z_dne: na_den } … přesune den (cíl musí být volný)
+#     zrusit:   [dny]             … den se stane volnem
+#     pridat:   { den: {...} }    … vlastní trénink NAVÍC (tenhle se na Garmin nahrává)
+#   Přesunutý/zrušený den se v efektivním plánu stane `volno`, takže se workout
+#   pod starým názvem (VTP-T10-ST-SIL) na Garminu automaticky smaže.
+
+meta:
+  nazev: "Vlastní tréninky a úpravy (Josef)"
+  poznamka: "Házená každý čtvrtek; přesuny podle zátěže kolem ní"
+
+opakovane:
+  - klic: hazena
+    den: ct
+    nazev: "Házená - trénink"
+    popis: |
+      Týmový trénink házené (~90 min).
+      Opakované sprinty, výskoky, změny směru + zátěž ramen a hodové paže.
+      Nenahrazuje souvislý běh v konstantním tempu ani silové dny na leh-sedy/kliky.
+    delka_min: 90
+
+# Pravidlo, ze kterého změny vycházejí: házená nesmí sousedit s tvrdým dnem
+# a v testovacím týdnu se objem nepřidává. V lichých týdnech (1, 3, 5, 7, 9, 11)
+# je čtvrtek v plánu volno, takže tam házená nekoliduje s ničím.
+zmeny:
+  - tyden: 9
+    prohodit: [pa, so]
+    duvod: "sprinty 2x10x100 m byly den po házené; po prohození ~44 h odstup místo ~20 h"
+
+  - tyden: 10
+    presun: { st: po }
+    zrusit: [ct]
+    pridat:
+      so:
+        typ: beh
+        popis: "zkouška rozvržení tempa na 12min test - záměrně submaximálně"
+        kroky:
+          - { krok: rozklusani, cas_min: 10 }
+          - krok: opakovat
+            pocet: 2
+            obsah:
+              - { krok: beh, cas_min: 6, cil: "tempo 4:42/km", popis: "cílové tempo testu (2550 m / 12 min)" }
+              - { krok: klus, cas_min: 3 }
+          - { krok: vyklus, cas_min: 10 }
+    duvod: >
+      Testovací týden: silovka ze středy na pondělí, ať je před házenou volný den;
+      čtvrteční 35min volný běh zrušen (objem má i tak dost);
+      v sobotu místo toho krátká zkouška tempa - propad tempa v testu je jeho slabina.
+
+  - tyden: 11
+    prohodit: [ut, pa]
+    duvod: >
+      HIIT combo (leh-sedy/kliky + sprinty) přesunuto z pátku na úterý, ať nenavazuje
+      hned na házenou; tahová silovka je v pátek - objem tahů/tlaků snížit o ~30 %,
+      házená zatěžuje stejná ramena hodem.
+
+  - tyden: 12
+    presun: { st: po }
+    zrusit: [ct]
+    duvod: >
+      Taper před finálním testem 27. 9.: silovka ze středy na pondělí, středa rest,
+      čtvrteční volný běh zrušen. Úterní broken time trial zůstává beze změny -
+      je to nejcennější zbylý trénink (zkouška tempa 5 dní před testem).
+      Házenou 24. 9. hrát jen technicko-takticky: bez maximálních sprintů,
+      osobních duelů a závěrečné hry naplno.
