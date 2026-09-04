@@ -374,6 +374,38 @@ def _build_strength_desc(day_data):
     return prefix + " | ".join(parts)
 
 
+def _klus_label(sub):
+    """'klus 60s' / 'klus 3min' - jednotka podle toho, ktery klic je zadan."""
+    if "cas_min" in sub:
+        return f"klus {sub['cas_min']}min"
+    return f"klus {sub.get('cas_s','?')}s"
+
+
+def _format_opakovat_obsah(obsah):
+    """Popis obsahu 'opakovat' - rekurzivne, aby vnorene 'opakovat'
+    (napr. 2 kola x 10 sprintu) nedalo prazdne '2x ()'."""
+    inner = []
+    for sub in obsah or []:
+        sk = sub.get("krok", "")
+        if sk == "chuze":
+            inner.append(f"chuze {sub.get('cas_s','?')}s")
+        elif sk == "beh":
+            t = sub.get("cas_s") or (str(sub.get("cas_min","?"))+"min")
+            sub_cil = sub.get("cil")
+            sub_txt = (" " + sub_cil + _hr_label_suffix(sub_cil)) if sub_cil else ""
+            inner.append((f"beh {t}s" if sub.get("cas_s") else f"beh {t}") + sub_txt)
+        elif sk == "usek":
+            sub_cil = sub.get("cil")
+            sub_txt = (" " + sub_cil + _hr_label_suffix(sub_cil, sub.get("vzdalenost_m"))) if sub_cil else ""
+            inner.append(f"{sub.get('vzdalenost_m','?')}m{sub_txt}")
+        elif sk == "klus":
+            inner.append(_klus_label(sub))
+        elif sk == "opakovat":
+            sub_pocet = sub.get("pocet", 1)
+            inner.append(f"{sub_pocet}x ({_format_opakovat_obsah(sub.get('obsah', []))})")
+    return " + ".join(inner)
+
+
 def _build_run_desc(day_data):
     """Popis behoveho workoutu (podtyp + kroky)."""
     podtyp = PODTYP_CS.get(day_data.get("podtyp", ""), "")
@@ -385,26 +417,10 @@ def _build_run_desc(day_data):
         elif kr == "vyklus":
             parts.append(f"Vyklus {k.get('cas_min',10)}min")
         elif kr == "klus":
-            parts.append(f"Klus {k.get('cas_min', k.get('cas_s','?'))}min")
+            parts.append(_klus_label(k).capitalize())
         elif kr == "opakovat":
             pocet = k.get("pocet", 1)
-            inner = []
-            for sub in k.get("obsah", []):
-                sk = sub.get("krok", "")
-                if sk == "chuze":
-                    inner.append(f"chuze {sub.get('cas_s','?')}s")
-                elif sk == "beh":
-                    t = sub.get("cas_s") or (str(sub.get("cas_min","?"))+"min")
-                    sub_cil = sub.get("cil")
-                    sub_txt = (" " + sub_cil + _hr_label_suffix(sub_cil)) if sub_cil else ""
-                    inner.append((f"beh {t}s" if sub.get("cas_s") else f"beh {t}") + sub_txt)
-                elif sk == "usek":
-                    sub_cil = sub.get("cil")
-                    sub_txt = (" " + sub_cil + _hr_label_suffix(sub_cil, sub.get("vzdalenost_m"))) if sub_cil else ""
-                    inner.append(f"{sub.get('vzdalenost_m','?')}m{sub_txt}")
-                elif sk == "klus":
-                    inner.append(f"klus {sub.get('cas_s', sub.get('cas_min','?'))}s")
-            parts.append(f"{pocet}x ({' + '.join(inner)})")
+            parts.append(f"{pocet}x ({_format_opakovat_obsah(k.get('obsah', []))})")
         elif kr in ("beh", "usek"):
             cil = k.get("cil")
             cil_txt = (" " + cil + _hr_label_suffix(cil, k.get("vzdalenost_m"))) if cil else ""
@@ -599,15 +615,20 @@ def _run_steps(kroky):
         elif krok == "opakovat":
             pocet      = k.get("pocet", 1)
             sub_steps  = _run_steps(k.get("obsah", []))
-            pauza_mezi = k.get("pauza_mezi_s")
+            pauza_mezi = _int_range(k["pauza_mezi_s"]) if "pauza_mezi_s" in k else None
             # pauza MEZI opakovanimi (analogie pauza_mezi_koly_s v build_strength_workout/
-            # build_combo_workout) - posledni opakovani ji nedostane, nic uz nenasleduje
+            # build_combo_workout) - posledni opakovani ji nedostane, nic uz nenasleduje.
+            # sub_steps se pred pridanim pauzy zbavi vlastniho koncoveho rest/recovery
+            # (napr. otevreny klus) - jinak by na konci kazdeho kola byly dve pauzy za sebou.
             if pauza_mezi and pocet > 1 and sub_steps:
-                grouped = [dict(s) for s in sub_steps]
+                core = list(sub_steps)
+                while core and core[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
+                    core.pop()
+                grouped = [dict(s) for s in core]
                 grouped.append(_step("rest", "time", pauza_mezi,
                                      desc=f"Pauza mezi opakovanimi ({pauza_mezi}s)"))
                 out.append(_repeat_group(pocet - 1, grouped))
-                out.extend(dict(s) for s in sub_steps)
+                out.extend(dict(s) for s in core)
             # pokud poslední krok opakování je pauza/klus, poslední opakování ji
             # nedostane - nic dalšího uvnitř opakování už nenásleduje
             elif pocet > 1 and sub_steps and sub_steps[-1]["stepType"]["stepTypeKey"] in ("rest", "recovery"):
